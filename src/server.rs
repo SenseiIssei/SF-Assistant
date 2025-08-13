@@ -11,9 +11,9 @@ use sf_api::{
 };
 
 use crate::{
+    AccountID, AccountIdent, CharacterInfo, QueID, ServerID,
     crawler::{CrawlAction, CrawlerState, WorkerQue},
     player::AccountInfo,
-    AccountID, AccountIdent, CharacterInfo, QueID, ServerID,
 };
 
 #[derive(Debug, Clone)]
@@ -84,15 +84,13 @@ impl Servers {
         connection: ServerConnection,
         pb: Option<indicatif::ProgressBar>,
     ) -> &mut ServerInfo {
-        let server =
-            self.0.entry(server_ident.id).or_insert_with(|| ServerInfo {
-                ident: server_ident.clone(),
-                accounts: Default::default(),
-                crawling: CrawlingStatus::Waiting,
-                connection,
-                headless_progress: pb,
-            });
-        server
+        self.0.entry(server_ident.id).or_insert_with(|| ServerInfo {
+            ident: server_ident.clone(),
+            accounts: Default::default(),
+            crawling: CrawlingStatus::Waiting,
+            connection,
+            headless_progress: pb,
+        })
     }
 
     pub fn get_ident(

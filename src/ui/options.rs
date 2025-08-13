@@ -1,6 +1,6 @@
 use iced::{
-    widget::{checkbox, column, text},
     Alignment, Element, Length,
+    widget::{checkbox, column, text},
 };
 
 use crate::{

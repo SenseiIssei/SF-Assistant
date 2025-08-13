@@ -2,13 +2,13 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Local};
 use iced::{
+    Alignment, Element, Length,
     alignment::Horizontal,
     theme,
     widget::{
-        self, button, checkbox, column, container, horizontal_space, pick_list,
-        progress_bar, row, text, Button,
+        self, Button, button, checkbox, column, container, horizontal_space,
+        pick_list, progress_bar, row, text,
     },
-    Alignment, Element, Length,
 };
 use iced_aw::{number_input, widgets::DropDown};
 use num_format::ToFormattedString;
@@ -16,13 +16,14 @@ use options::view_options;
 
 use self::{scrapbook::view_scrapbook, underworld::view_underworld};
 use crate::{
+    AccountIdent, AccountPage, ActionSelection, Helper, View,
     config::{AvailableTheme, Config},
     crawler::CrawlingOrder,
     get_server_code,
     message::Message,
     player::{AccountInfo, AccountStatus},
     server::{CrawlingStatus, ServerInfo},
-    top_bar, AccountIdent, AccountPage, ActionSelection, Helper, View,
+    top_bar,
 };
 
 mod options;
@@ -30,7 +31,7 @@ mod scrapbook;
 pub mod underworld;
 
 impl Helper {
-    pub fn view_current_page(&self) -> Element<Message> {
+    pub fn view_current_page(&self) -> Element<'_, Message> {
         let view: Element<Message> = match &self.current_view {
             View::Account { ident, page } => self.view_account(*ident, *page),
             View::Login => self
@@ -74,7 +75,7 @@ impl Helper {
         &self,
         ident: AccountIdent,
         page: AccountPage,
-    ) -> Element<Message> {
+    ) -> Element<'_, Message> {
         let Some((server, player)) = self.servers.get_ident(&ident) else {
             return self
                 .login_state
@@ -135,7 +136,7 @@ impl Helper {
             .into()
     }
 
-    fn view_settings(&self) -> Element<Message> {
+    fn view_settings(&self) -> Element<'_, Message> {
         let top_row = top_bar(
             text("Settings").size(20).into(),
             if self.has_accounts() {
@@ -236,7 +237,7 @@ impl Helper {
         &self,
         selected: &HashSet<AccountIdent>,
         currrent_action: &Option<ActionSelection>,
-    ) -> Element<Message> {
+    ) -> Element<'_, Message> {
         let top_bar =
             top_bar(text("Overview").size(20).into(), Some(Message::ViewLogin));
 
@@ -381,7 +382,7 @@ impl Helper {
             .align_items(Alignment::Center)
             .into()
     }
-    fn overview_actions(&self) -> Element<Message> {
+    fn overview_actions(&self) -> Element<'_, Message> {
         let mut all_actions = column!().spacing(4.0);
 
         fn action(button: Button<Message>) -> Button<Message> {

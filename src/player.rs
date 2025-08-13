@@ -7,14 +7,14 @@ use chrono::{DateTime, Local};
 use log::trace;
 use nohash_hasher::IntMap;
 use sf_api::{
-    gamestate::{underworld::Underworld, unlockables::ScrapBook, GameState},
+    gamestate::{GameState, underworld::Underworld, unlockables::ScrapBook},
     session::Session,
 };
 use tokio::time::sleep;
 
 use crate::{
-    config::CharacterConfig, login::PlayerAuth, message::Message, AccountIdent,
-    AttackTarget, CharacterInfo,
+    AccountIdent, AttackTarget, CharacterInfo, config::CharacterConfig,
+    login::PlayerAuth, message::Message,
 };
 
 pub struct AccountInfo {

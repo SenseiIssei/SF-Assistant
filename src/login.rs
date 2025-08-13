@@ -1,15 +1,14 @@
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     time::Duration,
 };
 
 use iced::{
-    theme,
+    Alignment, Command, Element, Length, Renderer, Theme, theme,
     widget::{
         self, button, checkbox, column, container, horizontal_space, row, text,
         text_input,
     },
-    Alignment, Command, Element, Length, Renderer, Theme,
 };
 use sf_api::{
     error::SFError,
@@ -20,9 +19,8 @@ use sf_api::{
 use tokio::time::sleep;
 
 use crate::{
-    config::AccountConfig, get_server_code, message::Message, top_bar,
     AccountID, AccountIdent, AccountInfo, AccountPage, Helper, ServerIdent,
-    View,
+    View, config::AccountConfig, get_server_code, message::Message, top_bar,
 };
 
 pub struct LoginState {
@@ -67,7 +65,7 @@ impl LoginState {
         &self,
         accounts: &[AccountConfig],
         has_active: bool,
-    ) -> Element<Message> {
+    ) -> Element<'_, Message> {
         let login_type_button = |label, filter, current_filter| {
             let label: widget::text::Text<'_, Theme, Renderer> = text(label);
             let button = button(label).style(if filter == current_filter {

@@ -1,21 +1,21 @@
 use iced::{
+    Alignment, Element, Length,
     alignment::Horizontal,
     theme,
     widget::{
-        button, checkbox, column, horizontal_space, row, scrollable, text,
-        vertical_space, Image,
+        Image, button, checkbox, column, horizontal_space, row, scrollable,
+        text, vertical_space,
     },
-    Alignment, Element, Length,
 };
 use iced_aw::number_input;
 
 use super::view_crawling;
 use crate::{
+    ClassImages,
     config::Config,
     message::Message,
     player::{AccountInfo, AccountStatus},
     server::ServerInfo,
-    ClassImages,
 };
 
 pub fn view_underworld<'a>(
@@ -30,10 +30,10 @@ pub fn view_underworld<'a>(
         AccountStatus::Idle(_, gs) => gs,
         AccountStatus::Busy(gs, _) => gs,
         AccountStatus::FatalError(err) => {
-            return text(format!("Error: {err}")).size(20).into()
+            return text(format!("Error: {err}")).size(20).into();
         }
         AccountStatus::LoggingInAgain => {
-            return text("Logging in player again".to_string()).size(20).into()
+            return text("Logging in player again".to_string()).size(20).into();
         }
     };
 
@@ -147,13 +147,13 @@ pub fn view_underworld<'a>(
             .spacing(5)
             .width(Length::FillPortion(3));
 
-        if let Some(class) = v.class {
-            if config.show_class_icons {
-                let img = Image::new(images.get_handle(class))
-                    .width(Length::FillPortion(1))
-                    .content_fit(iced::ContentFit::ScaleDown);
-                target_ident = target_ident.push(img);
-            }
+        if let Some(class) = v.class
+            && config.show_class_icons
+        {
+            let img = Image::new(images.get_handle(class))
+                .width(Length::FillPortion(1))
+                .content_fit(iced::ContentFit::ScaleDown);
+            target_ident = target_ident.push(img);
         }
         target_ident = target_ident.push(
             text(&v.name)

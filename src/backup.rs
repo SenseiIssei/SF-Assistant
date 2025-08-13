@@ -15,8 +15,8 @@ use tokio::{
 };
 
 use crate::{
-    handle_new_char_info, CharacterInfo, CrawlingOrder, CrawlingStatus, QueID,
-    WorkerQue,
+    CharacterInfo, CrawlingOrder, CrawlingStatus, QueID, WorkerQue,
+    handle_new_char_info,
 };
 
 pub async fn restore_backup(

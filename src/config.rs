@@ -3,7 +3,7 @@ use num_format::CustomFormat;
 use serde::{Deserialize, Serialize};
 use sf_api::session::PWHash;
 
-use crate::{server::ServerIdent, ServerID};
+use crate::{ServerID, server::ServerIdent};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
