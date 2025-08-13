@@ -2,24 +2,24 @@ use std::fmt::Write;
 
 use chrono::Local;
 use iced::{
+    Alignment, Element, Length,
     alignment::Horizontal,
     theme,
     widget::{
-        button, checkbox, column, horizontal_space, row, scrollable, text,
-        vertical_space, Image,
+        Image, button, checkbox, column, horizontal_space, row, scrollable,
+        text, vertical_space,
     },
-    Alignment, Element, Length,
 };
 use iced_aw::number_input;
 use num_format::ToFormattedString;
 
 use super::{remaining_minutes, view_crawling};
 use crate::{
+    ClassImages,
     config::Config,
     message::Message,
     player::{AccountInfo, AccountStatus},
     server::ServerInfo,
-    ClassImages,
 };
 
 pub fn view_scrapbook<'a>(
@@ -35,10 +35,10 @@ pub fn view_scrapbook<'a>(
         AccountStatus::Idle(_, gs) => gs,
         AccountStatus::Busy(gs, _) => gs,
         AccountStatus::FatalError(err) => {
-            return text(format!("Error: {err}")).size(20).into()
+            return text(format!("Error: {err}")).size(20).into();
         }
         AccountStatus::LoggingInAgain => {
-            return text("Logging in again".to_string()).size(20).into()
+            return text("Logging in again".to_string()).size(20).into();
         }
     };
 
@@ -101,13 +101,14 @@ pub fn view_scrapbook<'a>(
         .align_items(Alignment::Center);
     left_col = left_col.push(max_lvl);
 
-    let max_attributes = number_input(si.max_attributes, 9_999_999, move |nv| {
-        Message::PlayerSetMaxAttributes {
-            ident: aid,
-            max: nv,
-        }
-    })
-    .style(iced_aw::NumberInputStyles::Default);
+    let max_attributes =
+        number_input(si.max_attributes, 9_999_999, move |nv| {
+            Message::PlayerSetMaxAttributes {
+                ident: aid,
+                max: nv,
+            }
+        })
+        .style(iced_aw::NumberInputStyles::Default);
 
     let max_attributes =
         row!(text("Max Attributes:"), horizontal_space(), max_attributes)
@@ -195,13 +196,13 @@ pub fn view_scrapbook<'a>(
             .spacing(5)
             .width(Length::FillPortion(15));
 
-        if let Some(class) = v.info.class {
-            if config.show_class_icons {
-                let img = Image::new(images.get_handle(class))
-                    .width(Length::FillPortion(1))
-                    .content_fit(iced::ContentFit::ScaleDown);
-                target_ident = target_ident.push(img);
-            }
+        if let Some(class) = v.info.class
+            && config.show_class_icons
+        {
+            let img = Image::new(images.get_handle(class))
+                .width(Length::FillPortion(1))
+                .content_fit(iced::ContentFit::ScaleDown);
+            target_ident = target_ident.push(img);
         }
         target_ident = target_ident.push(
             text(&v.info.name)

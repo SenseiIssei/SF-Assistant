@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 use sf_api::{
     error::SFError,
-    gamestate::{character::*, GameState},
+    gamestate::{GameState, character::*},
     session::*,
 };
 use tokio::{sync::RwLock, time::sleep};

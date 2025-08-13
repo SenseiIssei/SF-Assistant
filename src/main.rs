@@ -9,8 +9,8 @@ mod server;
 mod ui;
 
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     time::Duration,
 };
 
@@ -19,10 +19,9 @@ use clap::{Parser, Subcommand};
 use config::{AccountConfig, Config};
 use crawler::{CrawlAction, Crawler, CrawlerState, CrawlingOrder, WorkerQue};
 use iced::{
-    executor, subscription, theme,
-    widget::{button, container, horizontal_space, row, text},
     Alignment, Application, Command, Element, Length, Settings, Subscription,
-    Theme,
+    Theme, executor, subscription, theme,
+    widget::{button, container, horizontal_space, row, text},
 };
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{debug, info, trace};
@@ -507,36 +506,36 @@ impl Application for Helper {
                     subs.push(subscription);
                 }
 
-                if let Some(si) = &acc.scrapbook_info {
-                    if si.auto_battle {
-                        let subscription = subscription::unfold(
-                            SubIdent::AutoBattle(acc.ident),
-                            AutoAttackChecker {
-                                player_status: acc.status.clone(),
-                                ident: acc.ident,
-                            },
-                            move |a: AutoAttackChecker| async move {
-                                (a.check().await, a)
-                            },
-                        );
-                        subs.push(subscription);
-                    }
+                if let Some(si) = &acc.scrapbook_info
+                    && si.auto_battle
+                {
+                    let subscription = subscription::unfold(
+                        SubIdent::AutoBattle(acc.ident),
+                        AutoAttackChecker {
+                            player_status: acc.status.clone(),
+                            ident: acc.ident,
+                        },
+                        move |a: AutoAttackChecker| async move {
+                            (a.check().await, a)
+                        },
+                    );
+                    subs.push(subscription);
                 };
 
-                if let Some(ui) = &acc.underworld_info {
-                    if ui.auto_lure {
-                        let subscription = subscription::unfold(
-                            SubIdent::AutoLure(acc.ident),
-                            AutoLureChecker {
-                                player_status: acc.status.clone(),
-                                ident: acc.ident,
-                            },
-                            move |a: AutoLureChecker| async move {
-                                (a.check().await, a)
-                            },
-                        );
-                        subs.push(subscription);
-                    }
+                if let Some(ui) = &acc.underworld_info
+                    && ui.auto_lure
+                {
+                    let subscription = subscription::unfold(
+                        SubIdent::AutoLure(acc.ident),
+                        AutoLureChecker {
+                            player_status: acc.status.clone(),
+                            ident: acc.ident,
+                        },
+                        move |a: AutoLureChecker| async move {
+                            (a.check().await, a)
+                        },
+                    );
+                    subs.push(subscription);
                 }
             }
 
@@ -798,10 +797,10 @@ pub fn calc_per_player_count(
             return false;
         }
 
-        if let Some((_, lost)) = si.blacklist.get(&info.uid) {
-            if *lost >= blacklist_th.max(1) {
-                return false;
-            }
+        if let Some((_, lost)) = si.blacklist.get(&info.uid)
+            && *lost >= blacklist_th.max(1)
+        {
+            return false;
         }
         true
     });

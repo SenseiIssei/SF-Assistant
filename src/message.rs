@@ -14,7 +14,7 @@ use tokio::time::sleep;
 use ui::OverviewAction;
 
 use self::{
-    backup::{get_newest_backup, restore_backup, RestoreData},
+    backup::{RestoreData, get_newest_backup, restore_backup},
     login::{SSOIdent, SSOLogin, SSOLoginStatus},
     ui::underworld::LureTarget,
 };
@@ -324,13 +324,12 @@ impl Helper {
                     return Command::batch(commands);
                 }
 
-                if let View::Account { ident, .. } = self.current_view {
-                    if let Some(current) =
+                if let View::Account { ident, .. } = self.current_view
+                    && let Some(current) =
                         server.accounts.get_mut(&ident.account)
-                    {
-                        let ident = current.ident;
-                        return self.update_best(ident, true);
-                    }
+                {
+                    let ident = current.ident;
+                    return self.update_best(ident, true);
                 }
             }
             Message::CrawlerIdle(server_id) => {
@@ -488,7 +487,7 @@ impl Helper {
                     PWHash::new(&self.login_state.password),
                     self.login_state.remember_me,
                     false,
-                )
+                );
             }
             Message::LoginPWInputChange(a) => self.login_state.password = a,
             Message::LoginServerChange(a) => self.login_state.server = a,
@@ -688,21 +687,18 @@ impl Helper {
                 else {
                     return Command::none();
                 };
-                if let Some(old) = server.accounts.remove(&ident.account) {
-                    if matches!(old.auth, PlayerAuth::SSO) {
-                        if let Ok(mut sl) = old.status.lock() {
-                            if let Some(session) = sl.take_session("Removing") {
-                                self.login_state.import_que.push(*session);
-                            }
-                        }
-                    }
+                if let Some(old) = server.accounts.remove(&ident.account)
+                    && matches!(old.auth, PlayerAuth::SSO)
+                    && let Ok(mut sl) = old.status.lock()
+                    && let Some(session) = sl.take_session("Removing")
+                {
+                    self.login_state.import_que.push(*session);
                 }
-                if server.accounts.is_empty() {
-                    if let CrawlingStatus::Crawling { threads, .. } =
+                if server.accounts.is_empty()
+                    && let CrawlingStatus::Crawling { threads, .. } =
                         &mut server.crawling
-                    {
-                        *threads = 0;
-                    }
+                {
+                    *threads = 0;
                 }
 
                 match &mut self.current_view {
@@ -1600,10 +1596,10 @@ impl Helper {
                     }
                 };
 
-                if let Some(sbi) = &mut account.underworld_info {
-                    if let Some(sb) = &gs.underworld {
-                        sbi.underworld = sb.clone();
-                    }
+                if let Some(sbi) = &mut account.underworld_info
+                    && let Some(sb) = &gs.underworld
+                {
+                    sbi.underworld = sb.clone();
                 }
 
                 drop(lock);
