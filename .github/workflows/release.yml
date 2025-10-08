@@ -1,26 +1,64 @@
-﻿on:
+on:
   release:
     types: [created]
 
 jobs:
   release:
     name: release ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-gnu
             archive: zip
-          - target: x86_64-unknown-linux-musl
+            os: windows-latest
+            exe_name: sf-scrapbook-helper.exe
+          - target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            os: ubuntu-latest
+            exe_name: sf-scrapbook-helper
+          - target: x86_64-apple-darwin
+            archive: zip
+            os: macos-latest
+            exe_name: sf-scrapbook-helper
+          - target: aarch64-apple-darwin
+            archive: zip
+            os: macos-latest
+            exe_name: sf-scrapbook-helper
     steps:
-      - uses: actions/checkout@master
-      - name: Compile and release
-        uses: rust-build/rust-build.action@v1.4.5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          RUSTTARGET: ${{ matrix.target }}
-          ARCHIVE_TYPES: ${{ matrix.archive }}
-          TOOLCHAIN_VERSION: stable
+          target: ${{ matrix.target }}
+      - name: Build Executable
+        run: cargo b -r --target ${{ matrix.target }}
+      - name: Create ZIP archive
+        shell: bash
+        run: |
+          mkdir -p release
+          cp "./target/${{ matrix.target }}/release/${{ matrix.exe_name }}" "./release/${{ matrix.exe_name }}"
+          if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
+          cd release
+          if [[ "${{ matrix.archive }}" == "tar.gz" ]]; then
+            tar -czf "sf-scrapbook-helper_${{ github.event.release.tag_name }}_${{ matrix.target }}.${{ matrix.archive }}" "${{ matrix.exe_name }}"
+          else
+            zip -j "sf-scrapbook-helper_${{ github.event.release.tag_name }}_${{ matrix.target }}.${{ matrix.archive }}" "${{ matrix.exe_name }}"
+          fi
+          cd ..
+          rm -f "./release/${{ matrix.exe_name }}"
+          else
+            cd release
+            pwsh -Command "Compress-Archive -Path '${{ matrix.exe_name }}' -DestinationPath 'sf-scrapbook-helper_${{ github.event.release.tag_name }}_${{ matrix.target }}.${{ matrix.archive }}'"
+            cd ..
+            pwsh -Command "Remove-Item './release/${{ matrix.exe_name }}'"
+          fi
+      - name: Upload build artifact to release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "./release/sf-scrapbook-helper_${{ github.event.release.tag_name }}_${{ matrix.target }}.${{ matrix.archive }}"
+          allowUpdates: true
+          omitBody: true
+          tag: ${{ github.event.release.tag_name }}
