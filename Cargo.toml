@@ -5,7 +5,7 @@ edition = "2024"
 
 description = "Automation assistant for Shakes & Fidget."
 license = "MIT"
-repository = "https://github.com/SenseiIssei/sf-scrapbook-helper"
+repository = "https://github.com/SenseiIssei/SF-Assistant"
 keywords = ["shakes-and-fidget", "s&f", "automation", "bot", "sf"]
 categories = ["games", "command-line-utilities"]
 
