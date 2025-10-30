@@ -1,4 +1,5 @@
 use iced::Theme;
+use iced::Color;
 use num_format::CustomFormat;
 use serde::{Deserialize, Serialize};
 use sf_api::session::PWHash;
@@ -65,7 +66,8 @@ impl Default for Config {
 
         Self {
             accounts: vec![],
-            theme: AvailableTheme::Dark,
+            // Default to our custom dark grey + orange theme
+            theme: AvailableTheme::CharcoalOrange,
             base_name,
             auto_fetch_newest: true,
             max_threads: default_threads(),
@@ -253,6 +255,39 @@ pub struct SFAccCharacter {
     pub config: CharacterConfig,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionStrategy {
+    Shortest,
+    MostGold,
+    BestGoldPerMinute,
+    BestXpPerMinute,
+    Smartest,
+}
+
+impl std::fmt::Display for MissionStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            MissionStrategy::Shortest => "Shortest",
+            MissionStrategy::MostGold => "MostGold",
+            MissionStrategy::BestGoldPerMinute => "BestGoldPerMinute",
+            MissionStrategy::BestXpPerMinute => "BestXpPerMinute",
+            MissionStrategy::Smartest => "Smartest",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+fn default_strategy() -> MissionStrategy { MissionStrategy::Smartest }
+
+impl Default for MissionStrategy {
+    fn default() -> Self {
+        MissionStrategy::Smartest
+    }
+}
+
+fn default_true() -> bool { true }
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CharacterConfig {
     #[serde(default)]
@@ -261,6 +296,80 @@ pub struct CharacterConfig {
     pub auto_battle: bool,
     #[serde(default)]
     pub auto_lure: bool,
+
+    #[serde(default)]
+    pub auto_tavern: bool,
+    #[serde(default)]
+    pub auto_expeditions: bool,
+    #[serde(default)]
+    pub auto_dungeons: bool,
+    #[serde(default)]
+    pub auto_pets: bool,
+    #[serde(default)]
+    pub auto_guild: bool,
+    // Guild sub-options
+    #[serde(default = "default_true")]
+    pub auto_guild_accept_defense: bool,
+    #[serde(default = "default_true")]
+    pub auto_guild_accept_attack: bool,
+    #[serde(default = "default_true")]
+    pub auto_guild_hydra: bool,
+
+    #[serde(default = "default_strategy")]
+    pub mission_strategy: MissionStrategy,
+    #[serde(default)]
+    pub reserve_mushrooms: u32,
+
+    // Tavern options
+    #[serde(default)]
+    pub auto_buy_beer_mushrooms: bool,
+    // Use quicksand glasses to finish quests early
+    #[serde(default)]
+    pub use_glasses_for_tavern: bool,
+
+    // Mushroom budgets (per session/day) for specific actions
+    // 0 = don't spend any by default
+    #[serde(default)]
+    pub max_mushrooms_beer: u32,
+    #[serde(default)]
+    pub max_mushrooms_dungeon_skip: u32,
+    #[serde(default)]
+    pub max_mushrooms_pet_skip: u32,
+
+    // Expeditions
+    #[serde(default)]
+    pub use_glasses_for_expeditions: bool,
+    #[serde(default = "default_expedition_reward_priority")]
+    pub expedition_reward_priority: ExpeditionRewardPriority,
+}
+
+fn default_expedition_reward_priority() -> ExpeditionRewardPriority {
+    ExpeditionRewardPriority::MushroomsGoldEggs
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum ExpeditionRewardPriority {
+    // Mushrooms > Gold/Silver > Pet egg > other
+    MushroomsGoldEggs,
+    // Gold/Silver > Mushrooms > Pet egg > other
+    GoldMushroomsEggs,
+    // Pet egg > Mushrooms > Gold/Silver > other
+    EggsMushroomsGold,
+}
+
+impl Default for ExpeditionRewardPriority {
+    fn default() -> Self { ExpeditionRewardPriority::MushroomsGoldEggs }
+}
+
+impl std::fmt::Display for ExpeditionRewardPriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ExpeditionRewardPriority::MushroomsGoldEggs => "Mushrooms > Gold > Eggs",
+            ExpeditionRewardPriority::GoldMushroomsEggs => "Gold > Mushrooms > Eggs",
+            ExpeditionRewardPriority::EggsMushroomsGold => "Pet eggs > Mushrooms > Gold",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash, PartialEq, Eq)]
@@ -317,6 +426,7 @@ pub enum AvailableTheme {
     Moonfly,
     Nightfly,
     Oxocarbon,
+    CharcoalOrange,
 }
 
 #[allow(clippy::to_string_trait_impl)]
@@ -345,6 +455,7 @@ impl ToString for AvailableTheme {
             Moonfly => Theme::Moonfly,
             Nightfly => Theme::Nightfly,
             Oxocarbon => Theme::Oxocarbon,
+            CharcoalOrange => return "CharcoalOrange".to_string(),
         }
         .to_string()
     }
@@ -376,6 +487,17 @@ impl AvailableTheme {
             Moonfly => Theme::Moonfly,
             Nightfly => Theme::Nightfly,
             Oxocarbon => Theme::Oxocarbon,
+            CharcoalOrange => {
+                // Custom dark grey + orange accent palette
+                let palette = iced::theme::Palette {
+                    background: Color::from_rgb8(20, 20, 22), // near-charcoal
+                    text: Color::from_rgb8(235, 235, 235),      // bright text
+                    primary: Color::from_rgb8(255, 140, 0),     // orange accent
+                    success: Color::from_rgb8(0, 175, 110),     // teal-green
+                    danger: Color::from_rgb8(220, 80, 80),      // soft red
+                };
+                Theme::custom("CharcoalOrange".to_string(), palette)
+            }
         }
     }
 }

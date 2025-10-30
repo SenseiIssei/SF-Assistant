@@ -1,10 +1,10 @@
 use std::{fmt::Write, sync::Arc, time::Duration};
 
 use chrono::Local;
-use config::{CharacterConfig, SFAccCharacter, SFCharIdent};
+use config::{CharacterConfig, SFAccCharacter, SFCharIdent, MissionStrategy};
 use crawler::CrawlerError;
 use iced::Command;
-use log::{error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use sf_api::{
     gamestate::GameState,
     session::{PWHash, Response, Session},
@@ -14,7 +14,7 @@ use tokio::time::sleep;
 use ui::OverviewAction;
 
 use self::{
-    backup::{RestoreData, get_newest_backup, restore_backup},
+    backup::{get_newest_backup, restore_backup, RestoreData},
     login::{SSOIdent, SSOLogin, SSOLoginStatus},
     ui::underworld::LureTarget,
 };
@@ -237,7 +237,93 @@ pub enum Message {
         server: ServerID,
         nv: bool,
     },
-    UIActive,
+
+    // NEW automation config messages
+    ConfigSetAutoTavern {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoExpeditions {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoDungeons {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoPets {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoGuild {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoGuildAcceptDefense {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoGuildAcceptAttack {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetAutoGuildHydra {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    // Tavern options
+    ConfigSetUseTavernGlasses {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    // Expeditions options
+    ConfigSetUseExpeditionGlasses {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+    ConfigSetExpeditionRewardPriority {
+        name: String,
+        server: ServerID,
+        nv: crate::config::ExpeditionRewardPriority,
+    },
+    ConfigSetMissionStrategy {
+        name: String,
+        server: ServerID,
+        nv: MissionStrategy,
+    },
+    ConfigSetAutoBuyBeerMushrooms {
+        name: String,
+        server: ServerID,
+        nv: bool,
+    },
+
+    // Mushroom budget sliders
+    ConfigSetMaxMushroomsBeer {
+        name: String,
+        server: ServerID,
+        nv: u32,
+    },
+    ConfigSetMaxMushroomsDungeonSkip {
+        name: String,
+        server: ServerID,
+        nv: u32,
+    },
+    ConfigSetMaxMushroomsPetSkip {
+        name: String,
+        server: ServerID,
+        nv: u32,
+    },
+
     AutoLureIdle,
     AutoLurePossible {
         ident: AccountIdent,
@@ -246,18 +332,844 @@ pub enum Message {
         ident: AccountIdent,
     },
     SetAction(Option<ActionSelection>),
+    // Periodic automation tick (Tavern/Expeditions/Dungeons/Pets)
+    RunAutomationTick { ident: AccountIdent },
 }
 
 impl Helper {
     pub fn handle_msg(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::UIActive => {}
-            Message::PageCrawled => {
-                // Gets handled in crawling
+            Message::RunAutomationTick { ident } => {
+                let Some(server) = self.servers.0.get_mut(&ident.server_id) else {
+                    return Command::none();
+                };
+                let Some(account) = server.accounts.get_mut(&ident.account) else {
+                    return Command::none();
+                };
+                log::debug!("Automation {:?}: tick start", ident);
+
+                let Some(cfg) = self
+                    .config
+                    .get_char_conf(&account.name, server.ident.id)
+                else {
+                    return Command::none();
+                };
+
+                if !(cfg.auto_tavern || cfg.auto_expeditions || cfg.auto_dungeons || cfg.auto_pets || cfg.auto_guild) {
+                    return Command::none();
+                }
+
+                use chrono::Local;
+                use sf_api::command::{Command as SFCommand, ExpeditionSetting, TimeSkip};
+                use sf_api::gamestate::tavern::{AvailableTasks, CurrentAction, ExpeditionStage};
+                use sf_api::gamestate::dungeons::{DungeonProgress, LightDungeon, ShadowDungeon, Dungeon};
+                use sf_api::gamestate::unlockables::{HabitatType, HabitatExploration};
+                use sf_api::misc::EnumMapGet;
+                use strum::IntoEnumIterator;
+                use sf_api::gamestate::items::Enchantment;
+
+                let mut status = account.status.lock().unwrap();
+
+                let AccountStatus::Idle(_, gs) = &*status else {
+                    log::debug!("Automation {:?}: account not idle, retrying shortly", ident);
+                    drop(status);
+                    let rerun = Command::perform(
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(fastrand::u64(500..=1500))).await;
+                        },
+                        move |_| Message::RunAutomationTick { ident }
+                    );
+                    return rerun;
+                };
+
+                let now = Local::now();
+                log::debug!("Automation {:?}: current_action = {:?}", ident, gs.tavern.current_action);
+
+                // Decide next automation command
+                let next_cmd: Option<SFCommand> = {
+                    // Handle ongoing quest completion or skipping
+                    match &gs.tavern.current_action {
+                        CurrentAction::Quest { busy_until, .. } => {
+                            if *busy_until <= now {
+                                Some(SFCommand::FinishQuest { skip: None })
+                            } else {
+                                // Consider skipping long waits (glass only; never mushrooms)
+                                let remaining = (*busy_until - now)
+                                    .to_std()
+                                    .unwrap_or_default();
+                                if remaining.as_secs() > 60 {
+                                    if cfg.use_glasses_for_tavern
+                                        && gs.tavern.quicksand_glasses > 0
+                                    {
+                                        log::debug!(
+                                            "Automation {:?}: Quest waiting {}s -> skip with glass (tavern glasses enabled)",
+                                            ident,
+                                            remaining.as_secs()
+                                        );
+                                        Some(SFCommand::FinishQuest {
+                                            skip: Some(TimeSkip::Glass),
+                                        })
+                                    } else {
+                                        log::debug!(
+                                            "Automation {:?}: Quest waiting {}s -> no skip (tavern glasses disabled or none available)",
+                                            ident,
+                                            remaining.as_secs()
+                                        );
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                        CurrentAction::Expedition => {
+                            // Continue/advance an active expedition if possible
+                            if let Some(active) = gs.tavern.expeditions.active() {
+                                match active.current_stage() {
+                                    ExpeditionStage::Boss(_) => {
+                                        log::debug!("Automation {:?}: Expedition boss -> continue", ident);
+                                        Some(SFCommand::ExpeditionContinue)
+                                    }
+                                    ExpeditionStage::Rewards(rewards) => {
+                                        if rewards.is_empty() {
+                                            log::debug!("Automation {:?}: Expedition rewards empty", ident);
+                                            None
+                                        } else {
+                                            // Choose reward based on configured priority
+                                            let mut best_idx = 0usize;
+                                            let mut best_rank = i32::MIN;
+                                            let prio = cfg.expedition_reward_priority;
+                                            for (i, r) in rewards.iter().enumerate() {
+                                                let s = format!("{:?}", r).to_lowercase();
+                                                let is_mush = s.contains("mushroom");
+                                                let is_gold = s.contains("gold") || s.contains("silver");
+                                                let is_egg = s.contains("egg");
+                                                let rank = match prio {
+                                                    crate::config::ExpeditionRewardPriority::MushroomsGoldEggs => {
+                                                        if is_mush { 3 } else if is_gold { 2 } else if is_egg { 1 } else { 0 }
+                                                    }
+                                                    crate::config::ExpeditionRewardPriority::GoldMushroomsEggs => {
+                                                        if is_gold { 3 } else if is_mush { 2 } else if is_egg { 1 } else { 0 }
+                                                    }
+                                                    crate::config::ExpeditionRewardPriority::EggsMushroomsGold => {
+                                                        if is_egg { 3 } else if is_mush { 2 } else if is_gold { 1 } else { 0 }
+                                                    }
+                                                };
+                                                if rank > best_rank { best_rank = rank; best_idx = i; }
+                                            }
+                                            log::debug!("Automation {:?}: Expedition pick reward index {} of {} (priority {:?})", ident, best_idx, rewards.len(), prio);
+                                            Some(SFCommand::ExpeditionPickReward { pos: best_idx })
+                                        }
+                                    }
+                                    ExpeditionStage::Encounters(encs) => {
+                                        if encs.is_empty() {
+                                            log::debug!("Automation {:?}: Expedition encounters empty", ident);
+                                            None
+                                        } else {
+                                            log::debug!("Automation {:?}: Expedition pick first encounter ({} options)", ident, encs.len());
+                                            Some(SFCommand::ExpeditionPickEncounter { pos: 0 })
+                                        }
+                                    }
+                                    ExpeditionStage::Waiting(until) => {
+                                        let remaining = (until - now)
+                                            .to_std()
+                                            .unwrap_or_default();
+                                        if cfg.use_glasses_for_expeditions
+                                            && remaining.as_secs() > 60
+                                            && gs.tavern.quicksand_glasses > 0
+                                        {
+                                            log::debug!("Automation {:?}: Expedition waiting {}s -> skip with glass", ident, remaining.as_secs());
+                                            Some(SFCommand::ExpeditionSkipWait {
+                                                typ: TimeSkip::Glass,
+                                            })
+                                        } else {
+                                            log::debug!("Automation {:?}: Expedition waiting {}s -> no skip", ident, remaining.as_secs());
+                                            None
+                                        }
+                                    }
+                                    ExpeditionStage::Finished
+                                    | ExpeditionStage::Unknown => None,
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        CurrentAction::CityGuard { hours: _hours, busy_until } => {
+                            let mut cmd: Option<SFCommand> = None;
+
+                            // If guard duty is finished, collect pay first
+                            if *busy_until <= now {
+                                log::debug!("Automation {:?}: CityGuard finished -> FinishWork", ident);
+                                cmd = Some(SFCommand::FinishWork);
+                            }
+
+                            if cfg.auto_dungeons {
+                                if let Some(portal) = &gs.dungeons.portal {
+                                    if portal.can_fight {
+                                        log::debug!("Automation {:?}: Portal fight ready (during CityGuard)", ident);
+                                        cmd = Some(SFCommand::FightPortal);
+                                    }
+                                }
+                                if cmd.is_none() {
+                                    let next_ready = gs
+                                        .dungeons
+                                        .next_free_fight
+                                        .map(|t| t <= now)
+                                        .unwrap_or(true);
+                                    let mut use_mush = false;
+                                    let can_fight_now = if next_ready {
+                                        true
+                                    } else if cfg.max_mushrooms_dungeon_skip > 0 && gs.character.mushrooms > 0 {
+                                        log::debug!("Automation {:?}: Dungeons not ready, using mushroom to skip (during CityGuard)", ident);
+                                        use_mush = true;
+                                        true
+                                    } else { false };
+
+                                    if can_fight_now {
+                                        if let DungeonProgress::Open { finished } = gs.dungeons.progress(LightDungeon::Tower) {
+                                            log::debug!("Automation {:?}: Tower ready at level {} (during CityGuard)", ident, finished);
+                                            cmd = Some(SFCommand::FightTower { current_level: finished as u8, use_mush });
+                                        } else {
+                                            let mut best: Option<(Dungeon, u16)> = None;
+                                            for d in LightDungeon::iter() {
+                                                if d == LightDungeon::Tower { continue; }
+                                                if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                                    let entry = (Dungeon::from(d), finished);
+                                                    best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                                }
+                                            }
+                                            for d in ShadowDungeon::iter() {
+                                                if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                                    let entry = (Dungeon::from(d), finished);
+                                                    best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                                }
+                                            }
+                                            if let Some((dng, _)) = best {
+                                                log::debug!("Automation {:?}: Dungeon chosen during CityGuard: {:?}", ident, dng);
+                                                cmd = Some(SFCommand::FightDungeon { dungeon: dng, use_mushroom: use_mush });
+                                            } else {
+                                                log::debug!("Automation {:?}: Dungeons ready but no open dungeon/tower found (during CityGuard)", ident);
+                                            }
+                                        }
+                                    } else {
+                                        log::debug!("Automation {:?}: Dungeons not ready (during CityGuard) (next_free_fight: {:?}, mushrooms: {})", ident, gs.dungeons.next_free_fight, gs.character.mushrooms);
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() && cfg.auto_pets {
+                                if let Some(pets) = &gs.pets {
+                                    let free_now = pets.opponent.next_free_battle.map(|t| t <= now).unwrap_or(true);
+                                    if free_now {
+                                        log::debug!("Automation {:?}: Pets PvP free (during CityGuard)", ident);
+                                        let mut target_hab: Option<HabitatType> = None;
+                                        if let Some(h) = pets.opponent.habitat {
+                                            if !pets.habitats.get(h).battled_opponent { target_hab = Some(h); }
+                                        }
+                                        if target_hab.is_none() {
+                                            use strum::IntoEnumIterator;
+                                            let mut best: Option<(HabitatType, u16)> = None;
+                                            for h in HabitatType::iter() {
+                                                let hab = pets.habitats.get(h);
+                                                if hab.battled_opponent { continue; }
+                                                if let Some(p) = hab.pets.iter().max_by_key(|p| p.level) {
+                                                    best = match best { None => Some((h, p.level)), Some((_, lvl)) if p.level > lvl => Some((h, p.level)), x => x };
+                                                }
+                                            }
+                                            if let Some((h, _)) = best { target_hab = Some(h); }
+                                        }
+                                        if let Some(h) = target_hab {
+                                            log::debug!("Automation {:?}: Pets PvP habitat {:?} (during CityGuard)", ident, h);
+                                            cmd = Some(SFCommand::FightPetOpponent { habitat: h, opponent_id: pets.opponent.id });
+                                        } else {
+                                            log::debug!("Automation {:?}: Pets PvP ready but no eligible habitat (during CityGuard)", ident);
+                                        }
+                                    }
+
+                                    if cmd.is_none() {
+                                        let next_ready = pets.next_free_exploration.map(|t| t <= now).unwrap_or(true);
+                                        let mut use_mush = false;
+                                        let can_explore = if next_ready { true } else if cfg.max_mushrooms_pet_skip > 0 && gs.character.mushrooms > 0 { use_mush = true; true } else { false };
+                                        if can_explore {
+                                            log::debug!("Automation {:?}: Pets exploration free (during CityGuard)", ident);
+                                            use strum::IntoEnumIterator;
+                                            let mut pick: Option<(HabitatType, u32, u16, u32)> = None;
+                                            for hab in HabitatType::iter() {
+                                                if let HabitatExploration::Exploring { fights_won, .. } = pets.habitats.get(hab).exploration {
+                                                    if let Some(best) = pets.habitats.get(hab).pets.iter().max_by_key(|p| p.level) {
+                                                        let entry = (hab, fights_won + 1, best.level, best.id);
+                                                        pick = match pick {
+                                                            None => Some(entry),
+                                                            Some((_, _, lvl, _)) if best.level > lvl => Some(entry),
+                                                            x => x,
+                                                        };
+                                                    }
+                                                }
+                                            }
+                                            if let Some((hab, enemy_pos, _best_lvl, best_id)) = pick {
+                                                if use_mush { log::debug!("Automation {:?}: Pets exploration not ready, using mushroom to skip (during CityGuard)", ident); }
+                                                log::debug!("Automation {:?}: Pets explore habitat {:?} fight_pos {} pet_id {} (during CityGuard)", ident, hab, enemy_pos, best_id);
+                                                cmd = Some(SFCommand::FightPetDungeon { use_mush, habitat: hab, enemy_pos, player_pet_id: best_id });
+                                            } else {
+                                                log::debug!("Automation {:?}: Pets exploration ready but no habitat currently exploring (during CityGuard)", ident);
+                                            }
+                                        } else {
+                                            log::debug!("Automation {:?}: Pets exploration not ready (during CityGuard) (next_free_exploration: {:?})", ident, pets.next_free_exploration);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() && cfg.auto_guild {
+                                if gs.guild.is_some() && cfg.auto_guild_accept_defense {
+                                    log::debug!("Automation {:?}: Guild join defense (during CityGuard)", ident);
+                                    cmd = Some(SFCommand::GuildJoinDefense);
+                                }
+                                if cmd.is_none() && gs.guild.is_some() && cfg.auto_guild_accept_attack {
+                                    log::debug!("Automation {:?}: Guild join attack (during CityGuard)", ident);
+                                    cmd = Some(SFCommand::GuildJoinAttack);
+                                }
+                                if cmd.is_none() && cfg.auto_guild_hydra {
+                                    if let Some(guild) = &gs.guild {
+                                        if guild.hydra.remaining_fights > 0 {
+                                            if let Some(next) = guild.hydra.next_battle {
+                                                if next <= now {
+                                                    log::debug!("Automation {:?}: Guild hydra battle (during CityGuard)", ident);
+                                                    cmd = Some(SFCommand::GuildPetBattle { use_mushroom: false });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() {
+                                let portal = gs.dungeons.portal.as_ref().map(|p| p.can_fight).unwrap_or(false);
+                                let dng_ready = gs.dungeons.next_free_fight.map(|t| t <= now).unwrap_or(true);
+                                let open_dng = {
+                                    let mut open = 0u32;
+                                    for d in LightDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { open += 1; }
+                                    }
+                                    for d in ShadowDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { open += 1; }
+                                    }
+                                    open
+                                };
+                                let pets_pvp_ready = gs.pets.as_ref().and_then(|p| p.opponent.next_free_battle).map(|t| t <= now).unwrap_or(false);
+                                let pets_explore_ready = gs.pets.as_ref().and_then(|p| p.next_free_exploration).map(|t| t <= now).unwrap_or(false);
+                                let hydra_ready = gs.guild.as_ref().and_then(|g| g.hydra.next_battle).map(|t| t <= now).unwrap_or(false);
+                                let thirst = gs.tavern.thirst_for_adventure_sec;
+                                log::debug!(
+                                    "Automation {:?}: CityGuard active. No Tavern tasks allowed. Summary -> portal: {}, dng_ready: {}, open_dng: {}, pets_pvp: {}, pets_explore: {}, hydra: {}, thirst: {}s",
+                                    ident, portal, dng_ready, open_dng, pets_pvp_ready, pets_explore_ready, hydra_ready, thirst
+                                );
+                            }
+
+                            cmd
+                        }
+                        CurrentAction::Unknown(_) | CurrentAction::Idle => {
+                            let mut cmd: Option<SFCommand> = None;
+
+                            if cfg.auto_dungeons {
+                                if let Some(portal) = &gs.dungeons.portal {
+                                    if portal.can_fight {
+                                        log::debug!("Automation {:?}: Portal fight ready", ident);
+                                        cmd = Some(SFCommand::FightPortal);
+                                    }
+                                }
+                                if cmd.is_none() {
+                                    let next_ready = gs
+                                        .dungeons
+                                        .next_free_fight
+                                        .map(|t| t <= now)
+                                        .unwrap_or(true);
+                                    let mut use_mush = false;
+                                    let can_fight_now = if next_ready { true } else if cfg.max_mushrooms_dungeon_skip > 0 && gs.character.mushrooms > 0 { log::debug!("Automation {:?}: Dungeons not ready, using mushroom to skip", ident); use_mush = true; true } else { false };
+
+                                    if can_fight_now {
+                                        if let DungeonProgress::Open { finished } = gs.dungeons.progress(LightDungeon::Tower) {
+                                            log::debug!("Automation {:?}: Tower ready at level {}", ident, finished);
+                                            cmd = Some(SFCommand::FightTower { current_level: finished as u8, use_mush });
+                                        } else {
+                                            let mut best: Option<(Dungeon, u16)> = None;
+                                            for d in LightDungeon::iter() {
+                                                if d == LightDungeon::Tower { continue; }
+                                                if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                                    let entry = (Dungeon::from(d), finished);
+                                                    best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                                }
+                                            }
+                                            for d in ShadowDungeon::iter() {
+                                                if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                                    let entry = (Dungeon::from(d), finished);
+                                                    best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                                }
+                                            }
+                                            if let Some((dng, _)) = best {
+                                                log::debug!("Automation {:?}: Dungeon chosen: {:?}", ident, dng);
+                                                cmd = Some(SFCommand::FightDungeon { dungeon: dng, use_mushroom: use_mush });
+                                            } else {
+                                                // Ready by timer/mush, but nothing open
+                                                log::debug!("Automation {:?}: Dungeons ready but no open dungeon/tower found", ident);
+                                            }
+                                        }
+                                    } else {
+                                        log::debug!("Automation {:?}: Dungeons not ready (next_free_fight: {:?}, mushrooms: {})", ident, gs.dungeons.next_free_fight, gs.character.mushrooms);
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() && cfg.auto_pets {
+                                if let Some(pets) = &gs.pets {
+                                    let free_now = pets.opponent.next_free_battle.map(|t| t <= now).unwrap_or(true);
+                                    if free_now {
+                                        log::debug!("Automation {:?}: Pets PvP free", ident);
+                                        let mut target_hab: Option<HabitatType> = None;
+                                        if let Some(h) = pets.opponent.habitat {
+                                            if !pets.habitats.get(h).battled_opponent { target_hab = Some(h); }
+                                        }
+                                        if target_hab.is_none() {
+                                            use strum::IntoEnumIterator;
+                                            let mut best: Option<(HabitatType, u16)> = None;
+                                            for h in HabitatType::iter() {
+                                                let hab = pets.habitats.get(h);
+                                                if hab.battled_opponent { continue; }
+                                                if let Some(p) = hab.pets.iter().max_by_key(|p| p.level) {
+                                                    best = match best { None => Some((h, p.level)), Some((_, lvl)) if p.level > lvl => Some((h, p.level)), x => x };
+                                                }
+                                            }
+                                            if let Some((h, _)) = best { target_hab = Some(h); }
+                                        }
+                                        if let Some(h) = target_hab {
+                                            log::debug!("Automation {:?}: Pets PvP habitat {:?}", ident, h);
+                                            cmd = Some(SFCommand::FightPetOpponent { habitat: h, opponent_id: pets.opponent.id });
+                                        } else {
+                                            log::debug!("Automation {:?}: Pets PvP ready but no eligible habitat (all battled or none with pets)", ident);
+                                        }
+                                    }
+
+                                    if cmd.is_none() {
+                                        let next_ready = pets.next_free_exploration.map(|t| t <= now).unwrap_or(true);
+                                        let mut use_mush = false;
+                                        let can_explore = if next_ready { true } else if cfg.max_mushrooms_pet_skip > 0 && gs.character.mushrooms > 0 { use_mush = true; true } else { false };
+                                        if can_explore {
+                                            log::debug!("Automation {:?}: Pets exploration free", ident);
+                                            use strum::IntoEnumIterator;
+                                            let mut pick: Option<(HabitatType, u32, u16, u32)> = None;
+                                            for hab in HabitatType::iter() {
+                                                if let HabitatExploration::Exploring { fights_won, .. } = pets.habitats.get(hab).exploration {
+                                                    if let Some(best) = pets.habitats.get(hab).pets.iter().max_by_key(|p| p.level) {
+                                                        let entry = (hab, fights_won + 1, best.level, best.id);
+                                                        pick = match pick {
+                                                            None => Some(entry),
+                                                            Some((_, _, lvl, _)) if best.level > lvl => Some(entry),
+                                                            x => x,
+                                                        };
+                                                    }
+                                                }
+                                            }
+                                            if let Some((hab, enemy_pos, _best_lvl, best_id)) = pick {
+                                                if use_mush { log::debug!("Automation {:?}: Pets exploration not ready, using mushroom to skip", ident); }
+                                                log::debug!("Automation {:?}: Pets explore habitat {:?} fight_pos {} pet_id {}", ident, hab, enemy_pos, best_id);
+                                                cmd = Some(SFCommand::FightPetDungeon { use_mush, habitat: hab, enemy_pos, player_pet_id: best_id });
+                                            } else {
+                                                log::debug!("Automation {:?}: Pets exploration ready but no habitat currently exploring", ident);
+                                            }
+                                        } else {
+                                            log::debug!("Automation {:?}: Pets exploration not ready (next_free_exploration: {:?})", ident, pets.next_free_exploration);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() {
+                                cmd = match gs.tavern.available_tasks() {
+                                    AvailableTasks::Expeditions(_) if cfg.auto_expeditions => {
+                                        if gs.tavern.questing_preference == ExpeditionSetting::PreferQuests
+                                            && gs.tavern.can_change_questing_preference() {
+                                            log::debug!("Automation {:?}: Switching to Expeditions", ident);
+                                            Some(SFCommand::SetQuestsInsteadOfExpeditions { value: ExpeditionSetting::PreferExpeditions })
+                                        } else if gs.tavern.thirst_for_adventure_sec > 0 {
+                                            log::debug!("Automation {:?}: Starting Expedition 0", ident);
+                                            Some(SFCommand::ExpeditionStart { pos: 0 })
+                                        } else { None }
+                                    }
+                                    AvailableTasks::Quests(qs) if cfg.auto_tavern => {
+                                        let pick_idx = {
+                                            let mut best: Option<(usize, f64)> = None;
+                                            for (i, q) in qs.iter().enumerate() {
+                                                let minutes = (q.base_length.max(1) as f64) / 60.0;
+                                                let gold = q.base_silver as f64;
+                                                let xp = q.base_experience as f64;
+                                                let score = match cfg.mission_strategy {
+                                                    MissionStrategy::Shortest => -minutes,
+                                                    MissionStrategy::MostGold => gold,
+                                                    MissionStrategy::BestGoldPerMinute => { if minutes > 0.0 { gold / minutes } else { f64::MAX } }
+                                                    MissionStrategy::BestXpPerMinute => { if minutes > 0.0 { xp / minutes } else { f64::MAX } }
+                                                    MissionStrategy::Smartest => { let speed = 1.0 / minutes.max(1.0); 0.45 * (gold / minutes.max(1.0)) + 0.45 * (xp / minutes.max(1.0)) + 0.10 * speed }
+                                                };
+                                                log::trace!("Automation {:?}: Quest {} len={}s gold={} xp={} -> score={}", ident, i, q.base_length, q.base_silver, q.base_experience, score);
+                                                match best { None => best = Some((i, score)), Some((_, s)) if score > s => best = Some((i, score)), _ => {} }
+                                            }
+                                            best.map(|a| a.0).unwrap_or(0)
+                                        };
+                                        let picked = &qs[pick_idx];
+                                        if picked.base_length > gs.tavern.thirst_for_adventure_sec {
+                                            let extra_beer = gs.character.equipment.has_enchantment(Enchantment::ThirstyWanderer) as u8;
+                                            let beer_cap = 10 + extra_beer;
+                                            if cfg.auto_buy_beer_mushrooms && cfg.max_mushrooms_beer > 0 && gs.character.mushrooms > 0 && gs.tavern.beer_drunk < beer_cap {
+                                                log::debug!("Automation {:?}: Buying beer (drunk {}, cap {})", ident, gs.tavern.beer_drunk, beer_cap);
+                                                Some(SFCommand::BuyBeer)
+                                            } else {
+                                                let mut alt_best: Option<(usize, f64)> = None;
+                                                for (i, q) in qs.iter().enumerate() {
+                                                    if q.base_length <= gs.tavern.thirst_for_adventure_sec {
+                                                        let minutes = (q.base_length.max(1) as f64) / 60.0;
+                                                        let gold = q.base_silver as f64;
+                                                        let xp = q.base_experience as f64;
+                                                        let score = match cfg.mission_strategy {
+                                                            MissionStrategy::Shortest => -minutes,
+                                                            MissionStrategy::MostGold => gold,
+                                                            MissionStrategy::BestGoldPerMinute => { if minutes > 0.0 { gold / minutes } else { f64::MAX } }
+                                                            MissionStrategy::BestXpPerMinute => { if minutes > 0.0 { xp / minutes } else { f64::MAX } }
+                                                            MissionStrategy::Smartest => { let speed = 1.0 / minutes.max(1.0); 0.45 * (gold / minutes.max(1.0)) + 0.45 * (xp / minutes.max(1.0)) + 0.10 * speed }
+                                                        };
+                                                        match alt_best { None => alt_best = Some((i, score)), Some((_, s)) if score > s => alt_best = Some((i, score)), _ => {} }
+                                                    }
+                                                }
+                                                if let Some((idx, _)) = alt_best {
+                                                    let q = &qs[idx];
+                                                    log::debug!("Automation {:?}: Fallback quest {} within thirst (len {}s)", ident, idx, q.base_length);
+                                                    Some(SFCommand::StartQuest { quest_pos: idx, overwrite_inv: true })
+                                                } else {
+                                                    log::debug!("Automation {:?}: No quest fits remaining thirst ({}s) and not buying beer -> waiting", ident, gs.tavern.thirst_for_adventure_sec);
+                                                    None
+                                                }
+                                            }
+                                        } else {
+                                            log::debug!("Automation {:?}: Starting quest {} (len {}s)", ident, pick_idx, picked.base_length);
+                                            Some(SFCommand::StartQuest { quest_pos: pick_idx, overwrite_inv: true })
+                                        }
+                                    }
+                                    _ => None,
+                                };
+                            }
+
+                            // If thirst is empty and beer is unavailable, start 1h CityGuard before any Guild actions
+                            if cmd.is_none() && (cfg.auto_tavern || cfg.auto_expeditions) {
+                                let thirst = gs.tavern.thirst_for_adventure_sec;
+                                if thirst == 0 {
+                                    let extra_beer = gs.character.equipment.has_enchantment(Enchantment::ThirstyWanderer) as u8;
+                                    let beer_cap = 10 + extra_beer;
+                                    let beer_left = beer_cap.saturating_sub(gs.tavern.beer_drunk);
+                                    let can_buy_more_beer = cfg.auto_buy_beer_mushrooms && cfg.max_mushrooms_beer > 0 && gs.character.mushrooms > 0 && gs.tavern.beer_drunk < beer_cap;
+                                    if beer_left == 0 || !can_buy_more_beer {
+                                        log::debug!("Automation {:?}: Thirst empty and beer exhausted/unavailable -> Start 1h CityGuard", ident);
+                                        #[allow(unused_variables)]
+                                        {
+                                            if cmd.is_none() {
+                                                cmd = Some(SFCommand::StartWork { hours: 1 });
+                                            }
+                                        }
+                                    } else {
+                                        log::debug!("Automation {:?}: Thirst empty but beer available (drunk {} / cap {}, mushrooms {}, auto_buy {}, beer_budget {}) -> no CityGuard", ident, gs.tavern.beer_drunk, beer_cap, gs.character.mushrooms, cfg.auto_buy_beer_mushrooms, cfg.max_mushrooms_beer);
+                                    }
+                                }
+                            }
+
+                            // Run Guild actions after Tavern/Expeditions and CityGuard decision so primary tasks aren't starved
+                            if cmd.is_none() && cfg.auto_guild {
+                                if gs.guild.is_some() && cfg.auto_guild_accept_defense {
+                                    log::debug!("Automation {:?}: Guild join defense", ident);
+                                    cmd = Some(SFCommand::GuildJoinDefense);
+                                }
+                                if cmd.is_none() && gs.guild.is_some() && cfg.auto_guild_accept_attack {
+                                    log::debug!("Automation {:?}: Guild join attack", ident);
+                                    cmd = Some(SFCommand::GuildJoinAttack);
+                                }
+                                if cmd.is_none() && cfg.auto_guild_hydra {
+                                    if let Some(guild) = &gs.guild {
+                                        if guild.hydra.remaining_fights > 0 {
+                                            if let Some(next) = guild.hydra.next_battle {
+                                                if next <= now {
+                                                    log::debug!("Automation {:?}: Guild hydra battle", ident);
+                                                    cmd = Some(SFCommand::GuildPetBattle { use_mushroom: false });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if cmd.is_none() {
+                                let portal = gs.dungeons.portal.as_ref().map(|p| p.can_fight).unwrap_or(false);
+                                let dng_ready = gs.dungeons.next_free_fight.map(|t| t <= now).unwrap_or(true);
+                                let open_dng = {
+                                    let mut open = 0u32;
+                                    for d in LightDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { open += 1; }
+                                    }
+                                    for d in ShadowDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { open += 1; }
+                                    }
+                                    open
+                                };
+                                let pets_pvp_ready = gs.pets.as_ref().and_then(|p| p.opponent.next_free_battle).map(|t| t <= now).unwrap_or(false);
+                                let pets_explore_ready = gs.pets.as_ref().and_then(|p| p.next_free_exploration).map(|t| t <= now).unwrap_or(false);
+                                let hydra_ready = gs.guild.as_ref().and_then(|g| g.hydra.next_battle).map(|t| t <= now).unwrap_or(false);
+                                let thirst = gs.tavern.thirst_for_adventure_sec;
+                                log::debug!(
+                                    "Automation {:?}: No action chosen. Summary -> portal: {}, dng_ready: {}, open_dng: {}, pets_pvp: {}, pets_explore: {}, hydra: {}, thirst: {}s",
+                                    ident, portal, dng_ready, open_dng, pets_pvp_ready, pets_explore_ready, hydra_ready, thirst
+                                );
+                            }
+
+                            cmd
+                        }
+                    }
+                };
+
+                // Allow side-actions (dungeons/pets/guild) to run even while Tavern is busy
+                let mut cmd = next_cmd;
+                if cmd.is_none() {
+                    // Try Dungeons first
+                    if cfg.auto_dungeons {
+                        if let Some(portal) = &gs.dungeons.portal {
+                            if portal.can_fight {
+                                log::debug!("Automation {:?}: Portal fight ready (side-action)", ident);
+                                cmd = Some(SFCommand::FightPortal);
+                            }
+                        }
+                        if cmd.is_none() {
+                            let next_ready = gs.dungeons.next_free_fight.map(|t| t <= now).unwrap_or(true);
+                            let mut use_mush = false;
+                            let can_fight_now = if next_ready { true } else if cfg.max_mushrooms_dungeon_skip > 0 && gs.character.mushrooms > 0 { use_mush = true; true } else { false };
+                            if can_fight_now {
+                                use sf_api::gamestate::dungeons::{LightDungeon, ShadowDungeon, DungeonProgress};
+                                if let DungeonProgress::Open { finished } = gs.dungeons.progress(LightDungeon::Tower) {
+                                    log::debug!("Automation {:?}: Tower ready at level {} (side-action)", ident, finished);
+                                    cmd = Some(SFCommand::FightTower { current_level: finished as u8, use_mush });
+                                } else {
+                                    use strum::IntoEnumIterator;
+                                    let mut best: Option<(sf_api::gamestate::dungeons::Dungeon, u16)> = None;
+                                    for d in LightDungeon::iter() {
+                                        if d == LightDungeon::Tower { continue; }
+                                        if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                            let entry = (sf_api::gamestate::dungeons::Dungeon::from(d), finished);
+                                            best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                        }
+                                    }
+                                    for d in ShadowDungeon::iter() {
+                                        if let DungeonProgress::Open { finished } = gs.dungeons.progress(d) {
+                                            let entry = (sf_api::gamestate::dungeons::Dungeon::from(d), finished);
+                                            best = match best { None => Some(entry), Some((_, f)) if finished < f => Some(entry), x => x };
+                                        }
+                                    }
+                                    if let Some((dng, _)) = best {
+                                        log::debug!("Automation {:?}: Dungeon chosen (side-action): {:?}", ident, dng);
+                                        cmd = Some(SFCommand::FightDungeon { dungeon: dng, use_mushroom: use_mush });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Try Pets next if still none
+                    if cmd.is_none() && cfg.auto_pets {
+                        if let Some(pets) = &gs.pets {
+                            // Prefer PvP if any habitat has not battled opponent yet, else exploration timer
+                            use sf_api::gamestate::unlockables::HabitatType;
+                            use strum::IntoEnumIterator;
+                            let mut any_pvp_left = false;
+                            for h in HabitatType::iter() {
+                                let hab = pets.habitats.get(h);
+                                if !hab.battled_opponent { any_pvp_left = true; break; }
+                            }
+                            if any_pvp_left {
+                                let free_now = pets.opponent.next_free_battle.map(|t| t <= now).unwrap_or(true);
+                                if free_now {
+                                    // Choose a habitat for PvP
+                                    let mut target_hab: Option<HabitatType> = None;
+                                    if let Some(h) = pets.opponent.habitat { if !pets.habitats.get(h).battled_opponent { target_hab = Some(h); } }
+                                    if target_hab.is_none() {
+                                        let mut best: Option<(HabitatType, u16)> = None;
+                                        for h in HabitatType::iter() {
+                                            let hab = pets.habitats.get(h);
+                                            if hab.battled_opponent { continue; }
+                                            if let Some(p) = hab.pets.iter().max_by_key(|p| p.level) {
+                                                best = match best { None => Some((h, p.level)), Some((_, lvl)) if p.level > lvl => Some((h, p.level)), x => x };
+                                            }
+                                        }
+                                        if let Some((h, _)) = best { target_hab = Some(h); }
+                                    }
+                                    if let Some(h) = target_hab {
+                                        log::debug!("Automation {:?}: Pets PvP habitat {:?} (side-action)", ident, h);
+                                        cmd = Some(SFCommand::FightPetOpponent { habitat: h, opponent_id: pets.opponent.id });
+                                    }
+                                }
+                            } else {
+                                // No PvP left; consider exploration if ready
+                                let next_ready = pets.next_free_exploration.map(|t| t <= now).unwrap_or(true);
+                                let mut use_mush = false;
+                                let can_explore = if next_ready { true } else if cfg.max_mushrooms_pet_skip > 0 && gs.character.mushrooms > 0 { use_mush = true; true } else { false };
+                                if can_explore {
+                                    let mut pick: Option<(HabitatType, u32, u16, u32)> = None;
+                                    for hab in HabitatType::iter() {
+                                        if let sf_api::gamestate::unlockables::HabitatExploration::Exploring { fights_won, .. } = pets.habitats.get(hab).exploration {
+                                            if let Some(best) = pets.habitats.get(hab).pets.iter().max_by_key(|p| p.level) {
+                                                let entry = (hab, fights_won + 1, best.level, best.id);
+                                                pick = match pick { None => Some(entry), Some((_, _, lvl, _)) if best.level > lvl => Some(entry), x => x };
+                                            }
+                                        }
+                                    }
+                                    if let Some((hab, enemy_pos, _best_lvl, best_id)) = pick {
+                                        log::debug!("Automation {:?}: Pets explore habitat {:?} fight_pos {} pet_id {} (side-action)", ident, hab, enemy_pos, best_id);
+                                        cmd = Some(SFCommand::FightPetDungeon { use_mush, habitat: hab, enemy_pos, player_pet_id: best_id });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Try Guild hydra last
+                    if cmd.is_none() && cfg.auto_guild {
+                        if let Some(guild) = &gs.guild {
+                            if cfg.auto_guild_hydra && guild.hydra.remaining_fights > 0 {
+                                if let Some(next) = guild.hydra.next_battle { if next <= now { cmd = Some(SFCommand::GuildPetBattle { use_mushroom: false }); } }
+                            }
+                        }
+                    }
+                }
+
+                let cmd = cmd.unwrap_or(SFCommand::Update);
+                log::debug!("Automation {:?}: chosen command: {:?}", ident, cmd);
+
+                // Try to acquire a session. If it's temporarily busy (e.g., AutoPoll), don't try to relog; just retry shortly.
+                let Some(mut session) = status.take_session("Automation") else {
+                    // Queue actionable commands if session is busy; skip queuing plain Update
+                    if !matches!(cmd, SFCommand::Update) {
+                        // Enforce exclusivity: only one primary Tavern/Expedition/CityGuard command
+                        // can be queued at a time. Side-actions (dungeons/pets/guild) are not considered primary.
+                        use sf_api::command::Command as SFCommand;
+                        let is_primary = |c: &SFCommand| -> bool {
+                            matches!(
+                                c,
+                                // Tavern / Quests
+                                SFCommand::StartQuest { .. }
+                                    | SFCommand::FinishQuest { .. }
+                                    | SFCommand::BuyBeer
+                                    | SFCommand::SetQuestsInsteadOfExpeditions { .. }
+                                    // Expeditions
+                                    | SFCommand::ExpeditionStart { .. }
+                                    | SFCommand::ExpeditionContinue
+                                    | SFCommand::ExpeditionPickEncounter { .. }
+                                    | SFCommand::ExpeditionPickReward { .. }
+                                    | SFCommand::ExpeditionSkipWait { .. }
+                                    // CityGuard (CityWatch)
+                                    | SFCommand::StartWork { .. }
+                                    | SFCommand::FinishWork
+                            )
+                        };
+
+                        if is_primary(&cmd)
+                            && account
+                                .automation_queue
+                                .iter()
+                                .any(|q| is_primary(q))
+                        {
+                            log::debug!(
+                                "Automation {:?}: session busy; NOT queueing {:?} because a primary task is already queued (len={})",
+                                ident,
+                                cmd,
+                                account.automation_queue.len()
+                            );
+                        } else {
+                            account.automation_queue.push(cmd.clone());
+                            log::debug!(
+                                "Automation {:?}: session busy; queueing {:?} (queue_len={})",
+                                ident,
+                                cmd,
+                                account.automation_queue.len()
+                            );
+                        }
+                    } else {
+                        log::debug!("Automation {:?}: session busy; skipping Update", ident);
+                    }
+                    drop(status);
+                    let rerun = Command::perform(
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(fastrand::u64(400..=1200))).await;
+                        },
+                        move |_| Message::RunAutomationTick { ident }
+                    );
+                    return rerun;
+                };
+                let player_status = account.status.clone();
+                let chosen_cmd = cmd.clone();
+                drop(status);
+
+                return Command::perform(
+                    async move {
+                        let resp = session.send_command(&cmd).await;
+                        (resp, session)
+                    },
+                    move |r| match r.0 {
+                        Ok(resp) => {
+                            log::debug!("Automation {:?}: {:?} response: {:?}", ident, chosen_cmd, resp);
+                            let mut lock = player_status.lock().unwrap();
+                            let gs = match &mut *lock {
+                                AccountStatus::Busy(gs, _) => gs,
+                                _ => {
+                                    lock.put_session(r.1);
+                                    return Message::PlayerNotPolled { ident };
+                                }
+                            };
+                            if gs.update(resp).is_err() {
+                                return Message::PlayerCommandFailed {
+                                    ident,
+                                    session: r.1,
+                                    attempt: 0,
+                                };
+                            }
+                            {
+                                use strum::IntoEnumIterator;
+                                use sf_api::gamestate::dungeons::{LightDungeon, ShadowDungeon, DungeonProgress};
+                                let portal = gs.dungeons.portal.as_ref().map(|p| p.can_fight).unwrap_or(false);
+                                let dng_next = gs.dungeons.next_free_fight;
+                                let open_count = {
+                                    let mut c = 0u32;
+                                    for d in LightDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { c += 1; }
+                                    }
+                                    for d in ShadowDungeon::iter() {
+                                        if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { c += 1; }
+                                    }
+                                    c
+                                };
+                                let pets_pvp = gs.pets.as_ref().and_then(|p| p.opponent.next_free_battle);
+                                let pets_exp = gs.pets.as_ref().and_then(|p| p.next_free_exploration);
+                                let hydra = gs.guild.as_ref().map(|g| (g.hydra.remaining_fights, g.hydra.next_battle));
+                                log::debug!(
+                                    "Automation {:?}: post-update snapshot -> portal: {}, dng_next: {:?}, open_dng: {}, pets_pvp: {:?}, pets_exp: {:?}, hydra: {:?}",
+                                    ident, portal, dng_next, open_count, pets_pvp, pets_exp, hydra
+                                );
+                            }
+                            lock.put_session(r.1);
+                            Message::PlayerPolled { ident }
+                        }
+                        Err(e) => {
+                            log::error!("Automation {:?}: {:?} failed: {:?}", ident, chosen_cmd, e);
+                            Message::PlayerCommandFailed {
+                                ident,
+                                session: r.1,
+                                attempt: 0,
+                            }
+                        },
+                    },
+                );
             }
+            Message::PageCrawled => {}
             Message::CrawlerDied { server, error } => {
                 log::error!("Crawler died on {server} - {error}");
-
                 let Some(server) = self.servers.get_mut(&server) else {
                     return Command::none();
                 };
@@ -302,14 +1214,10 @@ impl Helper {
                 };
 
                 if *crawl_que_id != que_id {
-                    // This was crawled for an outdated que version (we cleared
-                    // the que)
                     return Command::none();
                 }
 
-                // We were able to make this request, so something must work
                 recent_failures.clear();
-
                 *last_update = Local::now();
 
                 handle_new_char_info(character, equipment, player_info, naked);
@@ -363,7 +1271,6 @@ impl Helper {
                 );
             }
             Message::CrawlerNoPlayerResult => {
-                // Maybe we want to count this as an error?
                 warn!("No player result");
             }
             Message::CrawlerUnable {
@@ -433,11 +1340,6 @@ impl Helper {
                 }
                 debug!("Restarting crawler on {}", server.ident.ident);
 
-                // The last 10 command failed consecutively. This means there
-                // is some sort of issue with either the internet connection, or
-                // the session. To resolve this, we try to login the crawler
-                // again.
-
                 let Some(state) = crawling_session.clone() else {
                     return Command::none();
                 };
@@ -462,7 +1364,6 @@ impl Helper {
                                     "Could not parse GS for crawler on {}",
                                     id
                                 );
-                                // we can not hold mutex guards accross awaits
                                 sleep(Duration::from_millis(fastrand::u64(
                                     1000..3000,
                                 )))
@@ -511,7 +1412,7 @@ impl Helper {
                 remember,
                 ident,
             } => {
-                info!("Successfully logged in {ident}",);
+                info!("Successfully logged in {ident}");
 
                 let Some(server) = self.servers.0.get_mut(&ident.server_id)
                 else {
@@ -823,11 +1724,6 @@ impl Helper {
                 let total_len = si.best.len();
                 let new_len = si.best.iter().filter(|a| !a.is_old()).count();
 
-                // The list will be mostly old at startup.
-                // Therefore, we should wait until the list is mostly fetched,
-                // until we actually start. This is not new_len == total_len in
-                // case there is an off by one error/other bug somewhere, that
-                // would leave the auto-battle perma stuck here
                 if total_len == 0 || (new_len as f32 / total_len as f32) < 0.9 {
                     status.put_session(session);
                     return refetch;
@@ -934,8 +1830,6 @@ impl Helper {
                 };
 
                 if let Err(e) = s.update(*resp) {
-                    // it would *probably* be ok to just ignore this in most
-                    // cases, but whatever
                     *lock = AccountStatus::FatalError(e.to_string());
                     return Command::none();
                 };
@@ -1056,6 +1950,27 @@ impl Helper {
                 self.config.theme = theme;
                 _ = self.config.write();
             }
+            Message::ConfigSetUseTavernGlasses { name, server, nv } => {
+                if let Some(cc) = self.config.get_char_conf_mut(&name, server)
+                {
+                    cc.use_glasses_for_tavern = nv;
+                    let _ = self.config.write();
+                }
+            }
+            Message::ConfigSetUseExpeditionGlasses { name, server, nv } => {
+                if let Some(cc) = self.config.get_char_conf_mut(&name, server)
+                {
+                    cc.use_glasses_for_expeditions = nv;
+                    let _ = self.config.write();
+                }
+            }
+            Message::ConfigSetExpeditionRewardPriority { name, server, nv } => {
+                if let Some(cc) = self.config.get_char_conf_mut(&name, server)
+                {
+                    cc.expedition_reward_priority = nv;
+                    let _ = self.config.write();
+                }
+            }
             Message::ViewSettings => {
                 self.current_view = View::Settings;
             }
@@ -1074,7 +1989,6 @@ impl Helper {
                     .iter_mut()
                     .find(|a| a.ident == ident)
                 else {
-                    // Already logged in
                     return Command::none();
                 };
                 if remember {
@@ -1183,7 +2097,6 @@ impl Helper {
                 };
             }
             Message::SSOImport { pos } => {
-                // TODO: Bounds check this?
                 let account = self.login_state.import_que.remove(pos);
                 return self.login(account, false, PlayerAuth::SSO, false);
             }
@@ -1221,7 +2134,6 @@ impl Helper {
                 };
                 if self.login_state.active_sso.iter().any(|a| a.ident == ident)
                 {
-                    // Already logged in
                     return Command::none();
                 };
 
@@ -1240,12 +2152,8 @@ impl Helper {
                     self.login_state.login_typ = LoginType::SSOChars;
                 };
             }
-            Message::SSORetry => {
-                // The subscription will handle this
-            }
-            Message::SSOAuthError { .. } => {
-                // TODO: Display this I guess
-            }
+            Message::SSORetry => {}
+            Message::SSOAuthError { .. } => {}
             Message::OpenLink(url) => {
                 _ = open::that(url);
             }
@@ -1363,7 +2271,6 @@ impl Helper {
                 server: server_id,
                 error,
             } => {
-                // TODO: Display error?
                 let Some(server) = self.servers.get_mut(&server_id) else {
                     return Command::none();
                 };
@@ -1426,9 +2333,6 @@ impl Helper {
                         let Some(players) = equipment.get(eq) else {
                             continue;
                         };
-                        // We decrease the new equipment count of all players,
-                        // that have the same item as
-                        // the one we just "found"
                         for player in players {
                             let ppc =
                                 per_player_counts.entry(*player).or_insert(1);
@@ -1459,8 +2363,6 @@ impl Helper {
                 let mut lock = player.status.lock().unwrap();
                 *lock = AccountStatus::Busy(gs, "Waiting".into());
                 drop(lock);
-                // For some reason the game does not like sending requests
-                // immediately
                 return Command::perform(
                     async {
                         sleep(Duration::from_secs(10)).await;
@@ -1549,8 +2451,6 @@ impl Helper {
                 };
 
                 if let Err(e) = s.update(*resp) {
-                    // it would *probably* be ok to just ignore this in most
-                    // cases, but whatever
                     *lock = AccountStatus::FatalError(e.to_string());
                     return Command::none();
                 };
@@ -1596,13 +2496,114 @@ impl Helper {
                     }
                 };
 
+                if let Some(cfg) = self
+                    .config
+                    .get_char_conf(&account.name, server.ident.id)
+                    && cfg.auto_expeditions
+                {
+                    use sf_api::gamestate::tavern::{CurrentAction, ExpeditionStage};
+                    if matches!(gs.tavern.current_action, CurrentAction::Expedition) {
+                        if let Some(active) = gs.tavern.expeditions.active() {
+                            let needs_more = match active.current_stage() {
+                                ExpeditionStage::Waiting(_) | ExpeditionStage::Finished | ExpeditionStage::Unknown => false,
+                                _ => true,
+                            };
+                            if needs_more && account.automation_queue.is_empty() {
+                                drop(lock);
+                                return Command::perform(
+                                    async move {
+                                        tokio::time::sleep(std::time::Duration::from_millis(fastrand::u64(30..=90))).await;
+                                    },
+                                    move |_| Message::RunAutomationTick { ident }
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if let Some(sbi) = &mut account.underworld_info
                     && let Some(sb) = &gs.underworld
                 {
                     sbi.underworld = sb.clone();
                 }
-
                 drop(lock);
+
+                if let Some(cmd) = account.automation_queue.first().cloned() {
+                    let mut status = account.status.lock().unwrap();
+                    if let Some(mut session) = status.take_session("AutomationQueue") {
+                        let _ = account.automation_queue.remove(0);
+                        log::debug!(
+                            "Automation {:?}: sending queued {:?} (remaining={})",
+                            ident,
+                            cmd,
+                            account.automation_queue.len()
+                        );
+                        let player_status = account.status.clone();
+                        let queued_cmd = cmd.clone();
+                        let queued_cmd_for_log = queued_cmd.clone();
+                        drop(status);
+
+                        return Command::perform(
+                            async move {
+                                let resp = session.send_command(&queued_cmd).await;
+                                (resp, session)
+                            },
+                            move |r| match r.0 {
+                                Ok(resp) => {
+                                    log::debug!("Automation {:?}: queued {:?} response: {:?}", ident, queued_cmd_for_log, resp);
+                                    let mut lock = player_status.lock().unwrap();
+                                    let gs = match &mut *lock {
+                                        AccountStatus::Busy(gs, _) => gs,
+                                        _ => {
+                                            lock.put_session(r.1);
+                                            return Message::PlayerNotPolled { ident };
+                                        }
+                                    };
+                                    if gs.update(resp).is_err() {
+                                        return Message::PlayerCommandFailed {
+                                            ident,
+                                            session: r.1,
+                                            attempt: 0,
+                                        };
+                                    }
+                                    {
+                                        use strum::IntoEnumIterator;
+                                        use sf_api::gamestate::dungeons::{LightDungeon, ShadowDungeon, DungeonProgress};
+                                        let portal = gs.dungeons.portal.as_ref().map(|p| p.can_fight).unwrap_or(false);
+                                        let dng_next = gs.dungeons.next_free_fight;
+                                        let open_count = {
+                                            let mut c = 0u32;
+                                            for d in LightDungeon::iter() {
+                                                if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { c += 1; }
+                                            }
+                                            for d in ShadowDungeon::iter() {
+                                                if let DungeonProgress::Open { .. } = gs.dungeons.progress(d) { c += 1; }
+                                            }
+                                            c
+                                        };
+                                        let pets_pvp = gs.pets.as_ref().and_then(|p| p.opponent.next_free_battle);
+                                        let pets_exp = gs.pets.as_ref().and_then(|p| p.next_free_exploration);
+                                        let hydra = gs.guild.as_ref().map(|g| (g.hydra.remaining_fights, g.hydra.next_battle));
+                                        log::debug!(
+                                            "Automation {:?}: post-update snapshot (queued) -> portal: {}, dng_next: {:?}, open_dng: {}, pets_pvp: {:?}, pets_exp: {:?}, hydra: {:?}",
+                                            ident, portal, dng_next, open_count, pets_pvp, pets_exp, hydra
+                                        );
+                                    }
+                                    lock.put_session(r.1);
+                                    Message::PlayerPolled { ident }
+                                }
+                                Err(e) => {
+                                    log::error!("Automation {:?}: queued {:?} failed: {:?}", ident, queued_cmd_for_log, e);
+                                    Message::PlayerCommandFailed {
+                                        ident,
+                                        session: r.1,
+                                        attempt: 0,
+                                    }
+                                },
+                            },
+                        );
+                    }
+                }
             }
             Message::PlayerSetMaxUndergroundLvl { ident, lvl } => {
                 let Some(server) = self.servers.get_mut(&ident.server_id)
@@ -1825,11 +2826,6 @@ impl Helper {
                 let total_len = ui.best.len();
                 let new_len = ui.best.iter().filter(|a| !a.is_old()).count();
 
-                // Thelist will be mostly old at startup.
-                // Therefore, we should wait until the list is mostly fetched,
-                // until we actually start. This is not new_len == total_len in
-                // case there is an off by one error/other bug somewhere, that
-                // would leave the auto-battle perma stuck here
                 if total_len == 0 || (new_len as f32 / total_len as f32) < 0.9 {
                     status.put_session(session);
                     return refetch;
@@ -1879,6 +2875,100 @@ impl Helper {
                 config.auto_lure = nv;
                 _ = self.config.write();
             }
+
+            // NEW automation config handlers
+            Message::ConfigSetAutoTavern { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_tavern = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoExpeditions { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_expeditions = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoDungeons { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_dungeons = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoPets { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_pets = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoGuild { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_guild = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoGuildAcceptDefense { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_guild_accept_defense = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoGuildAcceptAttack { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_guild_accept_attack = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoGuildHydra { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_guild_hydra = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetMissionStrategy { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.mission_strategy = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetAutoBuyBeerMushrooms { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.auto_buy_beer_mushrooms = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetMaxMushroomsBeer { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.max_mushrooms_beer = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetMaxMushroomsDungeonSkip { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.max_mushrooms_dungeon_skip = nv;
+                _ = self.config.write();
+            }
+            Message::ConfigSetMaxMushroomsPetSkip { name, server, nv } => {
+                let Some(cfg) = self.config.get_char_conf_mut(&name, server) else {
+                    return Command::none();
+                };
+                cfg.max_mushrooms_pet_skip = nv;
+                _ = self.config.write();
+            }
+
             Message::AutoLure { ident, state } => {
                 let Some(server) = self.servers.0.get_mut(&ident.server_id)
                 else {

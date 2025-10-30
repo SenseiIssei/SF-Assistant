@@ -1,7 +1,13 @@
 [package]
-name = "sf-scrapbook-helper"
-version = "0.2.7"
+name = "sf-assistant"
+version = "1.0.0"
 edition = "2024"
+
+description = "Automation assistant for Shakes & Fidget."
+license = "MIT"
+repository = "https://github.com/SenseiIssei/sf-scrapbook-helper"
+keywords = ["shakes-and-fidget", "s&f", "automation", "bot", "sf"]
+categories = ["games", "command-line-utilities"]
 
 [dependencies]
 ahash = "0.8"
@@ -15,6 +21,7 @@ iced = { version = "0.12", default-features = false, features = [
     "lazy",
     "image",
     "advanced",
+    "wgpu",
 ] }
 iced_aw = { version = "0.9", default-features = false, features = [
     "number_input",
@@ -36,6 +43,7 @@ semver = "1.0.26"
 serde = "1.0"
 serde_json = "1.0"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", version = "0.3.0" }
+strum = "0.27"
 titlecase = "3.6"
 tokio = { version = "1.47", default-features = false, features = ["fs"] }
 toml = "0.8"

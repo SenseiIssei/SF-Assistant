@@ -1,10 +1,13 @@
 use iced::{
     Alignment, Element, Length,
-    widget::{checkbox, column, text},
+    widget::{checkbox, column, text, row, pick_list},
 };
 
 use crate::{
-    config::Config, message::Message, player::AccountInfo, server::ServerInfo,
+    config::{Config, MissionStrategy},
+    message::Message,
+    player::AccountInfo,
+    server::ServerInfo,
 };
 
 pub fn view_options<'a>(
@@ -22,7 +25,7 @@ pub fn view_options<'a>(
         .into();
     };
 
-    let mut all = column!().spacing(20).width(Length::Fixed(300.0));
+    let mut all = column!().spacing(20).width(Length::Fixed(360.0));
 
     all = all.push(
         checkbox("Automatically login on startup", config.login).on_toggle(
@@ -53,6 +56,79 @@ pub fn view_options<'a>(
             },
         ),
     );
+
+    all = all.push(text("Automation").size(18));
+
+    all = all.push(
+        row![
+            checkbox("Tavern", config.auto_tavern).on_toggle(|nv| Message::ConfigSetAutoTavern {
+                name: player.name.clone(),
+                server: og_server.ident.id,
+                nv,
+            }),
+            checkbox("Expeditions", config.auto_expeditions).on_toggle(|nv| Message::ConfigSetAutoExpeditions {
+                name: player.name.clone(),
+                server: og_server.ident.id,
+                nv,
+            }),
+        ]
+        .spacing(16),
+    );
+
+    all = all.push(
+        row![
+            checkbox("Dungeons", config.auto_dungeons).on_toggle(|nv| Message::ConfigSetAutoDungeons {
+                name: player.name.clone(),
+                server: og_server.ident.id,
+                nv,
+            }),
+            checkbox("Pets", config.auto_pets).on_toggle(|nv| Message::ConfigSetAutoPets {
+                name: player.name.clone(),
+                server: og_server.ident.id,
+                nv,
+            }),
+        ]
+        .spacing(16),
+    );
+
+    all = all.push(
+        row![
+            checkbox("Guild", config.auto_guild).on_toggle(|nv| Message::ConfigSetAutoGuild {
+                name: player.name.clone(),
+                server: og_server.ident.id,
+                nv,
+            }),
+        ]
+        .spacing(16),
+    );
+
+    let strategies = &[
+        MissionStrategy::Shortest,
+        MissionStrategy::MostGold,
+        MissionStrategy::BestGoldPerMinute,
+        MissionStrategy::BestXpPerMinute,
+        MissionStrategy::Smartest,
+    ];
+
+    all = all.push(
+        row![
+            text("Mission strategy").width(Length::Fixed(150.0)),
+            pick_list(
+                strategies.to_vec(),
+                Some(config.mission_strategy),
+                {
+                    let name = player.name.clone();
+                    let server = og_server.ident.id;
+                    move |nv| Message::ConfigSetMissionStrategy { name: name.clone(), server, nv }
+                }
+            )
+            .width(Length::Fixed(200.0))
+        ]
+        .spacing(12)
+        .align_items(Alignment::Center),
+    );
+
+    // Reserve mushrooms removed: we save all mushrooms by default and only spend if a specific budget is enabled
 
     column!(all)
         .padding(20)

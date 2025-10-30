@@ -14,7 +14,7 @@ use iced_aw::{number_input, widgets::DropDown};
 use num_format::ToFormattedString;
 use options::view_options;
 
-use self::{scrapbook::view_scrapbook, underworld::view_underworld};
+use self::{scrapbook::view_scrapbook, underworld::view_underworld, automation::view_automation};
 use crate::{
     AccountIdent, AccountPage, ActionSelection, Helper, View,
     config::{AvailableTheme, Config},
@@ -28,6 +28,7 @@ use crate::{
 
 mod options;
 mod scrapbook;
+mod automation;
 pub mod underworld;
 
 impl Helper {
@@ -42,7 +43,19 @@ impl Helper {
             }
             View::Settings => self.view_settings(),
         };
-        let main_part = container(view).width(Length::Fill).center_x();
+        // Wrap entire content in a themed container so the palette background is visible
+        let main_part = container(view)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .style(|theme: &iced::Theme| {
+                let p = theme.palette();
+                iced::widget::container::Appearance {
+                    background: Some(iced::Background::Color(p.background)),
+                    text_color: Some(p.text),
+                    ..Default::default()
+                }
+            });
         let mut res = column!();
 
         if self.should_update {
@@ -98,12 +111,13 @@ impl Helper {
         };
 
         let top = row!(
-            text(titlecase::titlecase(&player.name).to_string()).size(20),
+            text(&player.name).size(20),
             text(get_server_code(&server.ident.url))
                 .horizontal_alignment(iced::alignment::Horizontal::Right)
                 .size(20),
             selection(AccountPage::Scrapbook),
             selection(AccountPage::Underworld),
+            selection(AccountPage::Automation),
             selection(AccountPage::Options),
             button(text("Logout"))
                 .on_press(Message::RemoveAccount {
@@ -123,6 +137,11 @@ impl Helper {
             }
             AccountPage::Underworld => view_underworld(
                 server, player, &self.config, &self.class_images,
+            ),
+            AccountPage::Automation => view_automation(
+                player,
+                server,
+                &self.config,
             ),
             AccountPage::Options => view_options(player, server, &self.config),
         };
@@ -151,7 +170,7 @@ impl Helper {
             GruvboxLight, GruvboxDark, CatppuccinLatte, CatppuccinFrappe,
             CatppuccinMacchiato, CatppuccinMocha, TokyoNight, TokyoNightStorm,
             TokyoNightLight, KanagawaWave, KanagawaDragon, KanagawaLotus,
-            Moonfly, Nightfly, Oxocarbon,
+            Moonfly, Nightfly, Oxocarbon, CharcoalOrange,
         ];
 
         let theme_picker = pick_list(
@@ -220,7 +239,8 @@ impl Helper {
 
         let settings_column = column!(
             theme_row, auto_fetch_hof, auto_poll, max_threads, start_threads,
-            blacklist_threshold, crawling_restrict, show_class_icons
+            blacklist_threshold,
+            crawling_restrict, show_class_icons
         )
         .width(Length::Fixed(300.0))
         .spacing(20);
@@ -254,6 +274,11 @@ impl Helper {
             horizontal_space(),
             center(text("Underworld").width(UNDERWORLD_WIDTH)),
             center(text("Arena").width(NEXT_FIGHT_WIDTH)),
+            center(text("Tav").width(TAVERN_WIDTH)),
+            center(text("Exp").width(EXPEDITION_WIDTH)),
+            center(text("Dng").width(DUNGEON_WIDTH)),
+            center(text("Pets").width(PET_WIDTH)),
+            center(text("Guild").width(GUILD_WIDTH)),
             center(text("Scrapbook").width(SCRAPBOOK_COUNT_WIDTH)),
             text("Crawling").width(CRAWLING_STATUS_WIDTH),
         )
@@ -439,6 +464,11 @@ const SERVER_CODE_WIDTH: f32 = 50.0;
 const SCRAPBOOK_COUNT_WIDTH: f32 = 60.0;
 const NEXT_FIGHT_WIDTH: f32 = 60.0;
 const UNDERWORLD_WIDTH: f32 = 60.0;
+const DUNGEON_WIDTH: f32 = 60.0;
+const PET_WIDTH: f32 = 60.0;
+const GUILD_WIDTH: f32 = 60.0;
+const TAVERN_WIDTH: f32 = 60.0;
+const EXPEDITION_WIDTH: f32 = 60.0;
 const CRAWLING_STATUS_WIDTH: f32 = 80.0;
 
 fn overview_row<'a>(
@@ -459,7 +489,9 @@ fn overview_row<'a>(
         }
         AccountStatus::Busy(gs, reason) => {
             next_free_fight = Some(gs.arena.next_free_fight);
-            status_text(reason)
+            // Treat internal automation busy states as Active to avoid flicker
+            let r = reason.as_ref();
+            if r.starts_with("Auto") { status_text("Active") } else { status_text(reason) }
         }
         AccountStatus::FatalError(_) => status_text("Error!"),
         AccountStatus::LoggingInAgain => status_text("Logging in"),
@@ -469,8 +501,7 @@ fn overview_row<'a>(
         text(get_server_code(&server.ident.url)).width(SERVER_CODE_WIDTH),
     );
 
-    let acc_name = text(titlecase::titlecase(acc.name.as_str()).to_string())
-        .width(ACC_NAME_WIDTH);
+    let acc_name = text(&acc.name).width(ACC_NAME_WIDTH);
 
     let scrapbook_count: String = match &acc.scrapbook_info {
         Some(si) => si
@@ -487,34 +518,313 @@ fn overview_row<'a>(
     let icon_to_text =
         |icon| iced_aw::core::icons::bootstrap::icon_to_text(icon).size(18.0);
 
-    let abs = acc
-        .scrapbook_info
-        .as_ref()
-        .map(|a| {
-            if a.auto_battle {
-                iced_aw::Bootstrap::LightningFill
-            } else {
-                iced_aw::Bootstrap::Lightning
-            }
-        })
-        .unwrap_or(iced_aw::Bootstrap::Question);
+    let arena_cell: Element<Message> = {
+        let timer_text = match next_free_fight {
+            None => icon_to_text(iced_aw::Bootstrap::Question),
+            Some(Some(x)) if x >= Local::now() => text(remaining_minutes(x)),
+            Some(_) => icon_to_text(iced_aw::Bootstrap::Check),
+        };
 
-    let next_free_fight = match next_free_fight {
-        None => icon_to_text(iced_aw::Bootstrap::Question),
-        Some(Some(x)) if x >= Local::now() => text(remaining_minutes(x)),
-        Some(_) => icon_to_text(iced_aw::Bootstrap::Check),
+        let auto_on = config
+            .get_char_conf(&acc.name, server.ident.id)
+            .map(|c| c.auto_battle)
+            .unwrap_or(false);
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on {
+            iced_aw::Bootstrap::LightningFill
+        } else {
+            iced_aw::Bootstrap::Lightning
+        }))
+        .on_press(Message::ConfigSetAutoBattle { name, server: server_id, nv: !auto_on })
+        .padding(0.0);
+
+        row!(center(timer_text.width(25.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
     };
 
-    let next_free_fight = row!(
-        center(next_free_fight.width(25.0)),
-        center(icon_to_text(abs))
-    )
-    .align_items(Alignment::Center)
-    .spacing(4.0);
-
-    let next_free_fight = column!(next_free_fight)
+    let arena_cell = column!(arena_cell)
         .align_items(Alignment::Center)
         .width(NEXT_FIGHT_WIDTH);
+
+    let tavern_cell: Element<Message> = {
+    let (timer_text, auto_on) = match &*acc.status.lock().unwrap() {
+            AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                let now = Local::now();
+                use sf_api::gamestate::tavern::CurrentAction;
+                let timer_text = match &gs.tavern.current_action {
+                    CurrentAction::Quest { busy_until, .. } if *busy_until > now => {
+                        text(remaining_minutes(*busy_until))
+                    }
+                    CurrentAction::Quest { .. } => {
+                        // ended
+                        iced_aw::core::icons::bootstrap::icon_to_text(iced_aw::Bootstrap::Check).size(18.0)
+                    }
+                    CurrentAction::CityGuard { .. } => {
+                        iced_aw::core::icons::bootstrap::icon_to_text(iced_aw::Bootstrap::X).size(18.0)
+                    }
+                    _ => {
+                        if gs.tavern.thirst_for_adventure_sec > 0 {
+                            iced_aw::core::icons::bootstrap::icon_to_text(iced_aw::Bootstrap::Check).size(18.0)
+                        } else {
+                            iced_aw::core::icons::bootstrap::icon_to_text(iced_aw::Bootstrap::X).size(18.0)
+                        }
+                    }
+                };
+                let auto_on = config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_tavern)
+                    .unwrap_or(false);
+                (timer_text, auto_on)
+            }
+            _ => (
+                iced_aw::core::icons::bootstrap::icon_to_text(iced_aw::Bootstrap::Question).size(18.0),
+                config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_tavern)
+                    .unwrap_or(false),
+            ),
+        };
+
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on {
+            iced_aw::Bootstrap::LightningFill
+        } else {
+            iced_aw::Bootstrap::Lightning
+        }))
+        .on_press(Message::ConfigSetAutoTavern {
+            name,
+            server: server_id,
+            nv: !auto_on,
+        })
+        .padding(0.0);
+
+    row!(center(timer_text.width(25.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
+    };
+
+    let tavern_cell = column!(tavern_cell)
+        .align_items(Alignment::Center)
+        .width(TAVERN_WIDTH);
+
+    let expedition_cell: Element<Message> = {
+        let (display_text, auto_on) = match &*acc.status.lock().unwrap() {
+            AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                use sf_api::gamestate::tavern::{CurrentAction, ExpeditionStage, AvailableTasks};
+                let now = Local::now();
+                let label = match &gs.tavern.current_action {
+                    CurrentAction::Expedition => {
+                        if let Some(active) = gs.tavern.expeditions.active() {
+                            match active.current_stage() {
+                                ExpeditionStage::Waiting(until) if until > now => text(remaining_minutes(until)),
+                                ExpeditionStage::Waiting(_) => text("0:00"),
+                                _ => icon_to_text(iced_aw::Bootstrap::Check),
+                            }
+                        } else {
+                            text("Ready")
+                        }
+                    }
+                    _ => match gs.tavern.available_tasks() {
+                        AvailableTasks::Expeditions(_) if gs.tavern.thirst_for_adventure_sec > 0 => text("Ready"),
+                        _ => text("No thirst"),
+                    },
+                };
+                let auto_on = config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_expeditions)
+                    .unwrap_or(false);
+                (label, auto_on)
+            }
+            _ => (
+                text("Unknown"),
+                config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_expeditions)
+                    .unwrap_or(false),
+            ),
+        };
+
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on { iced_aw::Bootstrap::LightningFill } else { iced_aw::Bootstrap::Lightning }))
+            .on_press(Message::ConfigSetAutoExpeditions { name, server: server_id, nv: !auto_on })
+            .padding(0.0);
+
+        row!(center(display_text.width(60.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
+    };
+
+    let expedition_cell = column!(expedition_cell)
+        .align_items(Alignment::Center)
+        .width(EXPEDITION_WIDTH);
+
+    let dungeons_cell: Element<Message> = {
+    let (timer_text, auto_on) = match &*acc.status.lock().unwrap() {
+            AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                let now = Local::now();
+                let t = gs.dungeons.next_free_fight;
+                let timer_text = match t {
+                    Some(x) if x > now => text(remaining_minutes(x)),
+                    _ => icon_to_text(iced_aw::Bootstrap::Check),
+                };
+                let auto_on = config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_dungeons)
+                    .unwrap_or(false);
+                (timer_text, auto_on)
+            }
+            _ => (
+                icon_to_text(iced_aw::Bootstrap::Question),
+                config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_dungeons)
+                    .unwrap_or(false),
+            ),
+        };
+
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on {
+            iced_aw::Bootstrap::LightningFill
+        } else {
+            iced_aw::Bootstrap::Lightning
+        }))
+        .on_press(Message::ConfigSetAutoDungeons {
+            name,
+            server: server_id,
+            nv: !auto_on,
+        })
+        .padding(0.0);
+
+    row!(center(timer_text.width(25.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
+    };
+
+    let dungeons_cell = column!(dungeons_cell)
+        .align_items(Alignment::Center)
+        .width(DUNGEON_WIDTH);
+
+    let pets_cell: Element<Message> = {
+    let (timer_text, auto_on) = match &*acc.status.lock().unwrap() {
+            AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                let now = Local::now();
+                let timer_text = if let Some(pets) = &gs.pets {
+                    // If all habitats have battled opponent, prefer exploration timer
+                    use sf_api::gamestate::unlockables::HabitatType;
+                    use strum::IntoEnumIterator;
+                    use sf_api::misc::EnumMapGet;
+                    let mut any_pvp_left = false;
+                    for h in HabitatType::iter() { if !pets.habitats.get(h).battled_opponent { any_pvp_left = true; break; } }
+                    if any_pvp_left {
+                        match pets.opponent.next_free_battle {
+                            Some(t) if t > now => text(remaining_minutes(t)),
+                            Some(_) | None => icon_to_text(iced_aw::Bootstrap::Check),
+                        }
+                    } else {
+                        match pets.next_free_exploration {
+                            Some(t) if t > now => text(remaining_minutes(t)),
+                            Some(_) | None => icon_to_text(iced_aw::Bootstrap::Check),
+                        }
+                    }
+                } else {
+                    icon_to_text(iced_aw::Bootstrap::Question)
+                };
+                let auto_on = config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_pets)
+                    .unwrap_or(false);
+                (timer_text, auto_on)
+            }
+            _ => (
+                icon_to_text(iced_aw::Bootstrap::Question),
+                config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_pets)
+                    .unwrap_or(false),
+            ),
+        };
+
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on {
+            iced_aw::Bootstrap::LightningFill
+        } else {
+            iced_aw::Bootstrap::Lightning
+        }))
+        .on_press(Message::ConfigSetAutoPets {
+            name,
+            server: server_id,
+            nv: !auto_on,
+        })
+        .padding(0.0);
+
+    row!(center(timer_text.width(25.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
+    };
+
+    let pets_cell = column!(pets_cell)
+        .align_items(Alignment::Center)
+        .width(PET_WIDTH);
+
+    let guild_cell: Element<Message> = {
+    let (timer_text, auto_on) = match &*acc.status.lock().unwrap() {
+            AccountStatus::Idle(_, gs) | AccountStatus::Busy(gs, _) => {
+                let now = Local::now();
+                let (next, remaining) = gs.guild.as_ref().map(|g| (g.hydra.next_battle, g.hydra.remaining_fights)).unwrap_or((None, 0));
+                let timer_text = match (remaining, next) {
+                    (0, _) => icon_to_text(iced_aw::Bootstrap::X),
+                    (_, Some(t)) if t > now => text(remaining_minutes(t)),
+                    (_, _) => icon_to_text(iced_aw::Bootstrap::Check),
+                };
+                let auto_on = config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_guild_hydra)
+                    .unwrap_or(false);
+                (timer_text, auto_on)
+            }
+            _ => (
+                icon_to_text(iced_aw::Bootstrap::Question),
+                config
+                    .get_char_conf(&acc.name, server.ident.id)
+                    .map(|c| c.auto_guild_hydra)
+                    .unwrap_or(false),
+            ),
+        };
+
+        let name = acc.name.clone();
+        let server_id = server.ident.id;
+        let toggle = button(icon_to_text(if auto_on {
+            iced_aw::Bootstrap::LightningFill
+        } else {
+            iced_aw::Bootstrap::Lightning
+        }))
+        .on_press(Message::ConfigSetAutoGuildHydra {
+            name,
+            server: server_id,
+            nv: !auto_on,
+        })
+        .padding(0.0);
+
+    row!(center(timer_text.width(25.0)), toggle)
+            .align_items(Alignment::Center)
+            .spacing(4.0)
+            .into()
+    };
+
+    let guild_cell = column!(guild_cell)
+        .align_items(Alignment::Center)
+        .width(GUILD_WIDTH);
 
     let underworld_info: Element<Message> = acc
         .underworld_info
@@ -558,8 +868,13 @@ fn overview_row<'a>(
         server_code,
         acc_name,
         horizontal_space(),
-        underworld_info,
-        next_free_fight,
+    underworld_info,
+    arena_cell,
+    tavern_cell,
+    expedition_cell,
+        dungeons_cell,
+        pets_cell,
+        guild_cell,
         scrapbook_count,
         crawling_status
     )
@@ -576,10 +891,11 @@ fn overview_row<'a>(
 }
 
 fn remaining_minutes(time: DateTime<Local>) -> String {
+    // Round to whole minutes to reduce UI churn and keep the interface smooth
     let now = Local::now();
-    let secs = (time - now).num_seconds() % 60;
-    let mins = (time - now).num_seconds() / 60;
-    format!("{mins}:{secs:02}")
+    let total_secs = (time - now).num_seconds();
+    let mins = if total_secs <= 0 { 0 } else { (total_secs + 59) / 60 };
+    format!("{mins}m")
 }
 
 fn center(t: text::Text) -> text::Text {
@@ -604,7 +920,9 @@ pub fn view_crawling<'a>(
             let lock = que.lock().unwrap();
             let remaining = lock.count_remaining();
             let crawled = player_info.len();
-            let total = remaining + crawled;
+            // Avoid zero-range/NaN progress which can crash tiny-skia backend
+            let total_raw = remaining + crawled;
+            let total = total_raw.max(1);
 
             let progress_text = text(format!(
                 "Fetched {}/{}",
@@ -613,7 +931,7 @@ pub fn view_crawling<'a>(
             ));
             left_col = left_col.push(progress_text);
 
-            let progress = progress_bar(0.0..=total as f32, crawled as f32)
+            let progress = progress_bar(0.0..=total as f32, (crawled as usize).min(total) as f32)
                 .height(Length::Fixed(10.0));
             left_col = left_col.push(progress);
 

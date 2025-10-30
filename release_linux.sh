@@ -2,10 +2,10 @@
 set -euo pipefail
 
 version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.toml)
-targets=("x86_64-apple-darwin" "aarch64-apple-darwin")
-
 crate_name="sf-assistant"
 product_name="SFAssistant"
+
+targets=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
 
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd="sha256sum"
@@ -33,11 +33,12 @@ for target in "${targets[@]}"; do
   [[ -f THIRD_PARTY_LICENSES.txt ]] && cp THIRD_PARTY_LICENSES.txt "${workdir}/THIRD_PARTY_LICENSES.txt"
   [[ -f THIRD_PARTY_NOTICES.txt ]] && cp THIRD_PARTY_NOTICES.txt "${workdir}/THIRD_PARTY_NOTICES.txt"
 
-  outfile="${workdir}.zip"
-  zip -rq "${outfile}" "${workdir}"
+  outfile="${workdir}.tar.gz"
+  tar -C . -czf "${outfile}" "${workdir}"
   ${checksum_cmd} "${outfile}" > "dist/${outfile}.${checksum_ext}"
   mv "${outfile}" "dist/${outfile}"
   rm -rf "${workdir}"
+
 done
 
 echo "Done. Artifacts and checksums are in ./dist"

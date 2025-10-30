@@ -3620,8 +3620,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "sf-scrapbook-helper"
-version = "0.2.7"
+name = "sf-assistant"
+version = "1.0.0"
 dependencies = [
  "ahash",
  "async-compression",
@@ -3643,6 +3643,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sf-api",
+ "strum",
  "titlecase",
  "tokio",
  "toml 0.8.23",
