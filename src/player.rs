@@ -10,6 +10,7 @@ use sf_api::{
     gamestate::{GameState, underworld::Underworld, unlockables::ScrapBook},
     session::Session,
 };
+use sf_api::command::Command as SFCommand;
 use tokio::time::sleep;
 
 use crate::{
@@ -25,6 +26,7 @@ pub struct AccountInfo {
     pub status: Arc<Mutex<AccountStatus>>,
     pub scrapbook_info: Option<ScrapbookInfo>,
     pub underworld_info: Option<UnderworldInfo>,
+    pub automation_queue: Vec<SFCommand>,
 }
 
 pub struct UnderworldInfo {
@@ -107,6 +109,7 @@ impl AccountInfo {
             last_updated: Local::now(),
             status: Arc::new(Mutex::new(AccountStatus::LoggingIn)),
             ident,
+            automation_queue: Vec::new(),
         }
     }
 }
@@ -248,5 +251,111 @@ impl AutoPoll {
         }
         lock.put_session(session);
         Message::PlayerPolled { ident: self.ident }
+    }
+}
+
+pub struct AutoMissionsChecker {
+    pub player_status: Arc<Mutex<AccountStatus>>,
+    pub ident: AccountIdent,
+    pub first_tick: bool,
+}
+
+impl AutoMissionsChecker {
+    pub async fn check(&mut self) -> Message {
+        if self.first_tick {
+            self.first_tick = false;
+            log::debug!("AutoMissions {:?}: first tick, triggering soon", self.ident);
+            sleep(Duration::from_millis(fastrand::u64(200..=600))).await;
+            return Message::RunAutomationTick { ident: self.ident };
+        }
+        let is_idle = {
+            let s = self.player_status.lock().unwrap();
+            matches!(&*s, AccountStatus::Idle(_, _))
+        };
+        if !is_idle {
+            let backoff = fastrand::u64(1500..=3500);
+            log::debug!("AutoMissions {:?}: not idle, retry in {}ms", self.ident, backoff);
+            sleep(Duration::from_millis(backoff)).await;
+            return Message::RunAutomationTick { ident: self.ident };
+        }
+
+        use chrono::Local;
+        let now = Local::now();
+        let mut next_due: Option<chrono::DateTime<Local>> = None;
+        let mut due_now = false;
+
+        if let AccountStatus::Idle(_, gs) = &*self.player_status.lock().unwrap() {
+            use sf_api::gamestate::tavern::CurrentAction;
+            // Tavern: quest end or expedition waiting stage
+            match &gs.tavern.current_action {
+                CurrentAction::Quest { busy_until, .. } => {
+                    if *busy_until > now { next_due = Some(*busy_until); } else { due_now = true; }
+                }
+                CurrentAction::Expedition => {
+                    if let Some(active) = gs.tavern.expeditions.active() {
+                        use sf_api::gamestate::tavern::ExpeditionStage;
+                        if let ExpeditionStage::Waiting(until) = active.current_stage() {
+                            if until > now { next_due = Some(until); } else { due_now = true; }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            // Pets: PvP and exploration cooldowns
+            if let Some(pets) = &gs.pets {
+                match pets.opponent.next_free_battle {
+                    Some(t) => { if t > now { next_due = next_due.map_or(Some(t), |a| Some(a.min(t))); } else { due_now = true; } },
+                    None => { due_now = true; }
+                }
+                match pets.next_free_exploration {
+                    Some(t) => { if t > now { next_due = next_due.map_or(Some(t), |a| Some(a.min(t))); } else { due_now = true; } },
+                    None => { due_now = true; }
+                }
+            }
+
+            // Dungeons: next free fight timer
+            match gs.dungeons.next_free_fight {
+                Some(t) => { if t > now { next_due = next_due.map_or(Some(t), |a| Some(a.min(t))); } else { due_now = true; } },
+                None => { due_now = true; }
+            }
+
+            // Guild: hydra next battle
+            if let Some(guild) = &gs.guild {
+                if let Some(t) = guild.hydra.next_battle { if t > now { next_due = next_due.map_or(Some(t), |a| Some(a.min(t))); } else { due_now = true; } }
+            }
+        }
+
+        if due_now {
+            let jitter = fastrand::u64(400..=1200);
+            log::debug!("AutoMissions {:?}: one or more actions due now, jitter {}ms", self.ident, jitter);
+            sleep(Duration::from_millis(jitter)).await;
+        } else if let Some(t) = next_due {
+            if t > now {
+                let max_interval = std::time::Duration::from_secs(120);
+                let wait_full = (t - now).to_std().unwrap_or_default();
+                let wait = if wait_full > max_interval { max_interval } else { wait_full };
+                log::debug!(
+                    "AutoMissions {:?}: next due at {}, waiting {:?}",
+                    self.ident,
+                    t.format("%H:%M:%S"),
+                    wait
+                );
+                tokio::time::sleep(wait).await;
+            } else {
+                let jitter = fastrand::u64(400..=1200);
+                log::debug!("AutoMissions {:?}: due now, jitter {}ms", self.ident, jitter);
+                sleep(Duration::from_millis(jitter)).await;
+            }
+        } else {
+            let backoff = fastrand::u64(30_000..=60_000);
+            log::debug!("AutoMissions {:?}: no timers found, retry in {}ms", self.ident, backoff);
+            sleep(Duration::from_millis(backoff)).await;
+        }
+
+        let jitter = fastrand::u64(300..=1200);
+        log::trace!("AutoMissions {:?}: post-wait jitter {}ms", self.ident, jitter);
+        sleep(Duration::from_millis(jitter)).await;
+        Message::RunAutomationTick { ident: self.ident }
     }
 }

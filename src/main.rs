@@ -1,3 +1,4 @@
+// No changes needed; context-only patch removed; skipping.
 #![windows_subsystem = "windows"]
 mod backup;
 mod config;
@@ -37,7 +38,7 @@ use login::{LoginState, LoginType, PlayerAuth, SSOStatus, SSOValidator};
 use nohash_hasher::{IntMap, IntSet};
 use player::{
     AccountInfo, AccountStatus, AutoAttackChecker, AutoLureChecker, AutoPoll,
-    ScrapbookInfo,
+    ScrapbookInfo, AutoMissionsChecker,
 };
 use serde::{Deserialize, Serialize};
 use server::{CrawlingStatus, ServerIdent, ServerInfo, Servers};
@@ -98,9 +99,57 @@ impl Args {
 fn main() -> iced::Result {
     let args = Args::parse();
 
+    // Install a panic hook early so panics are captured even if logger init fails
+    std::panic::set_hook(Box::new(|info| {
+        use std::backtrace::Backtrace;
+        use std::io::Write;
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unknown panic payload"
+        };
+        let bt = Backtrace::force_capture().to_string();
+        // Try logging via log facade (if configured)
+        if let Some(loc) = info.location() {
+            log::error!(
+                "panic at {}:{}: {}\nbacktrace:\n{}",
+                loc.file(),
+                loc.line(),
+                msg,
+                bt
+            );
+        } else {
+            log::error!("panic: {}\nbacktrace:\n{}", msg, bt);
+        }
+        // Always append to a fallback panic.log to guarantee capture
+        let _ = (|| {
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("panic.log")
+                .ok()?;
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            if let Some(loc) = info.location() {
+                let _ = writeln!(
+                    f,
+                    "{} | PANIC | {}:{} | {}\n{}\n",
+                    ts, loc.file(), loc.line(), msg, bt
+                );
+            } else {
+                let _ = writeln!(f, "{} | PANIC | {}\n{}\n", ts, msg, bt);
+            }
+            Some(())
+        })();
+    }));
+
     let is_headless = args.is_headless();
     let config = get_log_config(is_headless);
-    log4rs::init_config(config).unwrap();
+    if let Err(e) = log4rs::init_config(config) {
+        // Don't crash if logging fails to initialize
+        eprintln!("Warning: failed to initialize logging: {}", e);
+    }
     info!("Starting up");
 
     let mut settings = Settings::with_flags(args);
@@ -238,6 +287,7 @@ pub enum ActionSelection {
 enum AccountPage {
     Scrapbook,
     Underworld,
+    Automation,
     Options,
 }
 
@@ -479,16 +529,20 @@ impl Application for Helper {
             AutoPoll(AccountIdent),
             AutoBattle(AccountIdent),
             AutoLure(AccountIdent),
+            AutoMissions(AccountIdent),
             SSOCheck(SSOProvider),
             Crawling(usize, ServerID),
         }
 
         let mut subs = vec![];
+        // Use configured UI refresh interval
+        let refresh_ms = self.config.ui_refresh_ms;
         let subscription = subscription::unfold(
             SubIdent::RefreshUI,
             (),
             move |a: ()| async move {
-                sleep(Duration::from_millis(200)).await;
+                // Control refresh frequency via settings (default 1000ms)
+                sleep(Duration::from_millis(refresh_ms)).await;
                 (Message::UIActive, a)
             },
         );
@@ -536,6 +590,18 @@ impl Application for Helper {
                         move |a: AutoLureChecker| async move {
                             (a.check().await, a)
                         },
+                    );
+                    subs.push(subscription);
+                }
+
+                // Run mission automation (tavern/expeditions/dungeons/pets/guild) when any is enabled
+                if let Some(cc) = self.config.get_char_conf(&acc.name, server.ident.id)
+                    && (cc.auto_tavern || cc.auto_expeditions || cc.auto_dungeons || cc.auto_pets || cc.auto_guild)
+                {
+                    let subscription = subscription::unfold(
+                        SubIdent::AutoMissions(acc.ident),
+                        AutoMissionsChecker { player_status: acc.status.clone(), ident: acc.ident, first_tick: true },
+                        move |mut a: AutoMissionsChecker| async move { (a.check().await, a) },
                     );
                     subs.push(subscription);
                 }
@@ -1060,10 +1126,28 @@ fn get_log_config(is_headless: bool) -> log4rs::Config {
         .encoder(Box::new(pattern.clone()))
         .build();
 
-    let logfile = FileAppender::builder()
+    // Try to create the primary logfile; on failure, fall back to a per-PID name
+    let logfile = match FileAppender::builder()
         .encoder(Box::new(pattern.clone()))
         .build("helper.log")
-        .unwrap();
+    {
+        Ok(f) => f,
+        Err(_e) => {
+            let pid = std::process::id();
+            FileAppender::builder()
+                .encoder(Box::new(pattern.clone()))
+                .build(format!("helper_{}.log", pid))
+                .unwrap_or_else(|_| {
+                    // As a last resort, default to a console-only appender later
+                    // Create a dummy file appender to a temp file if possible
+                    let tmp = std::env::temp_dir().join("helper_fallback.log");
+                    FileAppender::builder()
+                        .encoder(Box::new(pattern.clone()))
+                        .build(tmp)
+                        .expect("failed to create any logfile")
+                })
+        }
+    };
 
     let mut logger = log4rs::Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)));
@@ -1079,7 +1163,8 @@ fn get_log_config(is_headless: bool) -> log4rs::Config {
         .logger(
             Logger::builder()
                 .appender("logfile")
-                .build("sf_scrapbook_helper", log::LevelFilter::Debug),
+                // Lower verbose logging to Info to reduce I/O overhead during normal runs
+                .build("sf_scrapbook_helper", log::LevelFilter::Info),
         )
         .logger(
             Logger::builder()
