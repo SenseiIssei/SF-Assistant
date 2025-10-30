@@ -6,7 +6,11 @@ crate_name="sf-assistant"
 product_name="SFAssistant"
 
 host_target=$(rustc -vV | sed -n 's/^host: //p')
-targets=("${host_target}")
+if [[ -n "${TARGETS:-}" ]]; then
+  read -r -a targets <<< "${TARGETS}"
+else
+  targets=("${host_target}")
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd="sha256sum"

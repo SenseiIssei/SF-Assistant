@@ -3,7 +3,11 @@ set -euo pipefail
 
 version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.toml)
 host_target=$(rustc -vV | sed -n 's/^host: //p')
-targets=("${host_target}")
+if [[ -n "${TARGETS:-}" ]]; then
+  read -r -a targets <<< "${TARGETS}"
+else
+  targets=("${host_target}")
+fi
 
 crate_name="sf-assistant"
 product_name="SFAssistant"
