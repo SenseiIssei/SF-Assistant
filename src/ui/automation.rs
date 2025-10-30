@@ -104,12 +104,15 @@ pub fn view_automation<'a>(
                 server: og_server.ident.id,
                 nv,
             }),
-            checkbox("Expeditions", config.auto_expeditions).on_toggle(|nv| Message::ConfigSetAutoExpeditions {
-                name: player.name.clone(),
-                server: og_server.ident.id,
-                nv,
-            }),
-        ].spacing(24)
+                // Expeditions master toggle via checkbox
+                checkbox("Expeditions", config.auto_expeditions).on_toggle(|nv| Message::ConfigSetAutoExpeditions {
+                    name: player.name.clone(),
+                    server: og_server.ident.id,
+                    nv,
+                }),
+        ]
+        .spacing(24)
+        .align_items(Alignment::Center)
     );
     left = left.push(
         row![
@@ -181,7 +184,25 @@ pub fn view_automation<'a>(
         .align_items(Alignment::Center),
     );
     // Expedition options
-    left = left.push(text("Expeditions").size(18));
+    let exp_toggle_icon = iced_aw::core::icons::bootstrap::icon_to_text(
+        if config.auto_expeditions { iced_aw::Bootstrap::LightningFill } else { iced_aw::Bootstrap::Lightning }
+    )
+    .size(18.0);
+    left = left.push(
+        row![
+            text("Expeditions").size(18),
+            horizontal_space(),
+            button(exp_toggle_icon)
+                .on_press(Message::ConfigSetAutoExpeditions {
+                    name: player.name.clone(),
+                    server: og_server.ident.id,
+                    nv: !config.auto_expeditions,
+                })
+                .padding(2.0)
+                .style(theme::Button::Secondary),
+        ]
+        .align_items(Alignment::Center)
+    );
     left = left.push(
         row![
             checkbox("Use glasses to skip waits", config.use_glasses_for_expeditions)

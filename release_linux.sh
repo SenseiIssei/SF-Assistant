@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build universal macOS releases and generate checksums for GitHub releases.
-# Run normally with `cargo run` for development.
-
-# Extract version from Cargo.toml (portable across macOS/Linux)
 version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.toml)
-targets=("x86_64-apple-darwin" "aarch64-apple-darwin")
-
 project_name="ShakesAutomation"
 
-# Determine checksum command (macOS uses shasum, Linux often has sha256sum)
+targets=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
+
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd="sha256sum"
   checksum_ext="sha256sum"
@@ -34,19 +29,18 @@ for target in "${targets[@]}"; do
   rm -rf "${workdir}"
   mkdir -p "${workdir}"
 
-  # Copy artifacts and docs (include LICENSE to satisfy MIT requirements)
   cp "${bin_path}" "${workdir}/${project_name}"
   cp LICENSE "${workdir}/LICENSE.txt"
   cp README.md "${workdir}/README.md"
-  # Optionally include third-party notices if present
   [[ -f THIRD_PARTY_LICENSES.txt ]] && cp THIRD_PARTY_LICENSES.txt "${workdir}/THIRD_PARTY_LICENSES.txt"
   [[ -f THIRD_PARTY_NOTICES.txt ]] && cp THIRD_PARTY_NOTICES.txt "${workdir}/THIRD_PARTY_NOTICES.txt"
 
-  outfile="${workdir}.zip"
-  zip -rq "${outfile}" "${workdir}"
+  outfile="${workdir}.tar.gz"
+  tar -C . -czf "${outfile}" "${workdir}"
   ${checksum_cmd} "${outfile}" > "dist/${outfile}.${checksum_ext}"
   mv "${outfile}" "dist/${outfile}"
   rm -rf "${workdir}"
+
 done
 
 echo "Done. Artifacts and checksums are in ./dist"
