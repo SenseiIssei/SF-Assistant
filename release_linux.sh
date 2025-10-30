@@ -5,7 +5,8 @@ version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.to
 crate_name="sf-assistant"
 product_name="SFAssistant"
 
-targets=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
+host_target=$(rustc -vV | sed -n 's/^host: //p')
+targets=("${host_target}")
 
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd="sha256sum"
