@@ -1,4 +1,5 @@
 use iced::Theme;
+use iced::Color;
 use num_format::CustomFormat;
 use serde::{Deserialize, Serialize};
 use sf_api::session::PWHash;
@@ -13,8 +14,6 @@ pub struct Config {
     pub auto_fetch_newest: bool,
     #[serde(default)]
     pub auto_poll: bool,
-    #[serde(default = "default_ui_refresh_ms")]
-    pub ui_refresh_ms: u64,
     #[serde(default = "default_threads")]
     pub max_threads: usize,
     #[serde(default = "default_start_threads")]
@@ -36,10 +35,6 @@ fn default_threads() -> usize {
 
 fn default_start_threads() -> usize {
     1
-}
-
-fn default_ui_refresh_ms() -> u64 {
-    1000
 }
 
 fn default_locale() -> CustomFormat {
@@ -71,11 +66,10 @@ impl Default for Config {
 
         Self {
             accounts: vec![],
-            // Default to a blue/grey palette similar to the old look
-            theme: AvailableTheme::Nord,
+            // Default to our custom dark grey + orange theme
+            theme: AvailableTheme::CharcoalOrange,
             base_name,
             auto_fetch_newest: true,
-            ui_refresh_ms: default_ui_refresh_ms(),
             max_threads: default_threads(),
             auto_poll: false,
             show_crawling_restrict: false,
@@ -432,6 +426,7 @@ pub enum AvailableTheme {
     Moonfly,
     Nightfly,
     Oxocarbon,
+    CharcoalOrange,
 }
 
 #[allow(clippy::to_string_trait_impl)]
@@ -460,6 +455,7 @@ impl ToString for AvailableTheme {
             Moonfly => Theme::Moonfly,
             Nightfly => Theme::Nightfly,
             Oxocarbon => Theme::Oxocarbon,
+            CharcoalOrange => return "CharcoalOrange".to_string(),
         }
         .to_string()
     }
@@ -491,6 +487,17 @@ impl AvailableTheme {
             Moonfly => Theme::Moonfly,
             Nightfly => Theme::Nightfly,
             Oxocarbon => Theme::Oxocarbon,
+            CharcoalOrange => {
+                // Custom dark grey + orange accent palette
+                let palette = iced::theme::Palette {
+                    background: Color::from_rgb8(20, 20, 22), // near-charcoal
+                    text: Color::from_rgb8(235, 235, 235),      // bright text
+                    primary: Color::from_rgb8(255, 140, 0),     // orange accent
+                    success: Color::from_rgb8(0, 175, 110),     // teal-green
+                    danger: Color::from_rgb8(220, 80, 80),      // soft red
+                };
+                Theme::custom("CharcoalOrange".to_string(), palette)
+            }
         }
     }
 }

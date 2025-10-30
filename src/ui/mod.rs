@@ -43,7 +43,19 @@ impl Helper {
             }
             View::Settings => self.view_settings(),
         };
-        let main_part = container(view).width(Length::Fill).center_x();
+        // Wrap entire content in a themed container so the palette background is visible
+        let main_part = container(view)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .style(|theme: &iced::Theme| {
+                let p = theme.palette();
+                iced::widget::container::Appearance {
+                    background: Some(iced::Background::Color(p.background)),
+                    text_color: Some(p.text),
+                    ..Default::default()
+                }
+            });
         let mut res = column!();
 
         if self.should_update {
@@ -99,7 +111,7 @@ impl Helper {
         };
 
         let top = row!(
-            text(titlecase::titlecase(&player.name).to_string()).size(20),
+            text(&player.name).size(20),
             text(get_server_code(&server.ident.url))
                 .horizontal_alignment(iced::alignment::Horizontal::Right)
                 .size(20),
@@ -158,7 +170,7 @@ impl Helper {
             GruvboxLight, GruvboxDark, CatppuccinLatte, CatppuccinFrappe,
             CatppuccinMacchiato, CatppuccinMocha, TokyoNight, TokyoNightStorm,
             TokyoNightLight, KanagawaWave, KanagawaDragon, KanagawaLotus,
-            Moonfly, Nightfly, Oxocarbon,
+            Moonfly, Nightfly, Oxocarbon, CharcoalOrange,
         ];
 
         let theme_picker = pick_list(
@@ -225,29 +237,9 @@ impl Helper {
         .width(Length::Fill)
         .align_items(Alignment::Center);
 
-        // UI refresh interval control (250ms - 5000ms)
-        let refresh_input = number_input(
-            self.config.ui_refresh_ms as u32,
-            5000u32,
-            |nv| Message::SetUIRefresh((nv.max(250)) as u64),
-        );
-        let refresh_row = row!(
-            text("UI refresh (ms):"),
-            horizontal_space(),
-            refresh_input
-        )
-        .width(Length::Fill)
-        .align_items(Alignment::Center);
-
         let settings_column = column!(
             theme_row, auto_fetch_hof, auto_poll, max_threads, start_threads,
-            blacklist_threshold, refresh_row,
-            // Quick preset: Low Refresh Mode (2s)
-            checkbox(
-                "Low refresh mode (2s)",
-                self.config.ui_refresh_ms >= 2000,
-            )
-            .on_toggle(|nv| Message::SetUIRefresh(if nv { 2000 } else { 1000 })),
+            blacklist_threshold,
             crawling_restrict, show_class_icons
         )
         .width(Length::Fixed(300.0))
@@ -509,8 +501,7 @@ fn overview_row<'a>(
         text(get_server_code(&server.ident.url)).width(SERVER_CODE_WIDTH),
     );
 
-    let acc_name = text(titlecase::titlecase(acc.name.as_str()).to_string())
-        .width(ACC_NAME_WIDTH);
+    let acc_name = text(&acc.name).width(ACC_NAME_WIDTH);
 
     let scrapbook_count: String = match &acc.scrapbook_info {
         Some(si) => si
@@ -900,10 +891,11 @@ fn overview_row<'a>(
 }
 
 fn remaining_minutes(time: DateTime<Local>) -> String {
+    // Round to whole minutes to reduce UI churn and keep the interface smooth
     let now = Local::now();
-    let secs = (time - now).num_seconds() % 60;
-    let mins = (time - now).num_seconds() / 60;
-    format!("{mins}:{secs:02}")
+    let total_secs = (time - now).num_seconds();
+    let mins = if total_secs <= 0 { 0 } else { (total_secs + 59) / 60 };
+    format!("{mins}m")
 }
 
 fn center(t: text::Text) -> text::Text {

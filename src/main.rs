@@ -65,10 +65,8 @@ struct Args {
 #[derive(Debug, Subcommand, Clone)]
 enum CLICommand {
     Crawl {
-        /// The amount of servers that will be simultaniously crawled
         #[arg(short, long, default_value_t = 4, value_parser=concurrency_limits)]
         concurrency: usize,
-        /// The amount of threads per server used to
         #[arg(short, long, default_value_t = 1, value_parser=concurrency_limits)]
         threads: usize,
         #[clap(flatten)]
@@ -82,10 +80,8 @@ fn concurrency_limits(s: &str) -> Result<usize, String> {
 #[derive(Debug, clap::Args, Clone)]
 #[group(required = true, multiple = false)]
 pub struct ServerSelect {
-    /// Fetches a list of all servers and crawls all of them. Supercedes urls
     #[arg(short, long)]
     all: bool,
-    /// The list of all server urls to fetch
     #[arg(short, long, value_delimiter = ' ', num_args = 1..)]
     urls: Option<Vec<String>>,
 }
@@ -99,7 +95,6 @@ impl Args {
 fn main() -> iced::Result {
     let args = Args::parse();
 
-    // Install a panic hook early so panics are captured even if logger init fails
     std::panic::set_hook(Box::new(|info| {
         use std::backtrace::Backtrace;
         use std::io::Write;
@@ -111,7 +106,6 @@ fn main() -> iced::Result {
             "unknown panic payload"
         };
         let bt = Backtrace::force_capture().to_string();
-        // Try logging via log facade (if configured)
         if let Some(loc) = info.location() {
             log::error!(
                 "panic at {}:{}: {}\nbacktrace:\n{}",
@@ -123,7 +117,6 @@ fn main() -> iced::Result {
         } else {
             log::error!("panic: {}\nbacktrace:\n{}", msg, bt);
         }
-        // Always append to a fallback panic.log to guarantee capture
         let _ = (|| {
             let mut f = std::fs::OpenOptions::new()
                 .create(true)
@@ -147,7 +140,6 @@ fn main() -> iced::Result {
     let is_headless = args.is_headless();
     let config = get_log_config(is_headless);
     if let Err(e) = log4rs::init_config(config) {
-        // Don't crash if logging fails to initialize
         eprintln!("Warning: failed to initialize logging: {}", e);
     }
     info!("Starting up");
@@ -494,7 +486,7 @@ impl Application for Helper {
     }
 
     fn title(&self) -> String {
-        format!("Scrapbook Helper v{}", env!("CARGO_PKG_VERSION"))
+        format!("ShakesAutomation v{}", env!("CARGO_PKG_VERSION"))
     }
 
     fn update(
@@ -522,10 +514,8 @@ impl Application for Helper {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        // Disambiguates running subscriptions
         #[derive(Debug, Hash, PartialEq, Eq)]
         enum SubIdent {
-            RefreshUI,
             AutoPoll(AccountIdent),
             AutoBattle(AccountIdent),
             AutoLure(AccountIdent),
@@ -535,18 +525,6 @@ impl Application for Helper {
         }
 
         let mut subs = vec![];
-        // Use configured UI refresh interval
-        let refresh_ms = self.config.ui_refresh_ms;
-        let subscription = subscription::unfold(
-            SubIdent::RefreshUI,
-            (),
-            move |a: ()| async move {
-                // Control refresh frequency via settings (default 1000ms)
-                sleep(Duration::from_millis(refresh_ms)).await;
-                (Message::UIActive, a)
-            },
-        );
-        subs.push(subscription);
 
         for (server_id, server) in &self.servers.0 {
             for acc in server.accounts.values() {
@@ -594,7 +572,6 @@ impl Application for Helper {
                     subs.push(subscription);
                 }
 
-                // Run mission automation (tavern/expeditions/dungeons/pets/guild) when any is enabled
                 if let Some(cc) = self.config.get_char_conf(&acc.name, server.ident.id)
                     && (cc.auto_tavern || cc.auto_expeditions || cc.auto_dungeons || cc.auto_pets || cc.auto_guild)
                 {
@@ -1069,14 +1046,14 @@ pub fn handle_new_char_info(
 
     match player_entry {
         Entry::Occupied(mut old) => {
-            // We have already seen this player. We have to remove the old info
-            // and add the updated info
+            // Remove old equipment references
             let old_info = old.get();
             for eq in &old_info.equipment {
                 if let Some(x) = equipment.get_mut(eq) {
                     x.remove(&old_info.uid);
                 }
             }
+            // Add new equipment references
             for eq in char.equipment.clone() {
                 equipment
                     .entry(eq)
@@ -1084,21 +1061,27 @@ pub fn handle_new_char_info(
                         a.insert(char.uid);
                     })
                     .or_insert_with(|| {
-                        HashSet::from_iter([char.uid].into_iter())
+                        let mut hs: HashSet<u32, ahash::RandomState> = HashSet::default();
+                        hs.insert(char.uid);
+                        hs
                     });
             }
+            // Update naked sets
             if old_info.equipment.len() < EQ_CUTOFF {
-                naked.entry(old_info.level).and_modify(|a| {
-                    a.remove(&old_info.uid);
-                });
+                naked
+                    .entry(old_info.level)
+                    .and_modify(|a| {
+                        a.remove(&old_info.uid);
+                    });
             }
-
             if char.equipment.len() < EQ_CUTOFF {
                 naked.entry(char.level).or_default().insert(char.uid);
             }
+            // Store updated character info
             old.insert(char);
         }
         Entry::Vacant(v) => {
+            // First time seeing this player: add equipment references
             for eq in char.equipment.clone() {
                 equipment
                     .entry(eq)
@@ -1106,10 +1089,12 @@ pub fn handle_new_char_info(
                         a.insert(char.uid);
                     })
                     .or_insert_with(|| {
-                        HashSet::from_iter([char.uid].into_iter())
+                        let mut hs: HashSet<u32, ahash::RandomState> = HashSet::default();
+                        hs.insert(char.uid);
+                        hs
                     });
             }
-            if char.equipment.len() < EQ_CUTOFF && char.level >= 100 {
+            if char.equipment.len() < EQ_CUTOFF {
                 naked.entry(char.level).or_default().insert(char.uid);
             }
             v.insert(char);

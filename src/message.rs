@@ -324,7 +324,6 @@ pub enum Message {
         nv: u32,
     },
 
-    UIActive,
     AutoLureIdle,
     AutoLurePossible {
         ident: AccountIdent,
@@ -333,8 +332,6 @@ pub enum Message {
         ident: AccountIdent,
     },
     SetAction(Option<ActionSelection>),
-    // Settings: UI refresh interval (in ms)
-    SetUIRefresh(u64),
     // Periodic automation tick (Tavern/Expeditions/Dungeons/Pets)
     RunAutomationTick { ident: AccountIdent },
 }
@@ -342,10 +339,6 @@ pub enum Message {
 impl Helper {
     pub fn handle_msg(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::SetUIRefresh(ms) => {
-                self.config.ui_refresh_ms = ms.clamp(250, 5000);
-                let _ = self.config.write();
-            }
             Message::RunAutomationTick { ident } => {
                 let Some(server) = self.servers.0.get_mut(&ident.server_id) else {
                     return Command::none();
@@ -1174,7 +1167,6 @@ impl Helper {
                     },
                 );
             }
-            Message::UIActive => {}
             Message::PageCrawled => {}
             Message::CrawlerDied { server, error } => {
                 log::error!("Crawler died on {server} - {error}");
