@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build universal macOS releases and generate checksums for GitHub releases.
-# Run normally with `cargo run` for development.
-
-# Extract version from Cargo.toml (portable across macOS/Linux)
 version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.toml)
 targets=("x86_64-apple-darwin" "aarch64-apple-darwin")
 
-project_name="ShakesAutomation"
+crate_name="sf-assistant"
+product_name="SFAssistant"
 
-# Determine checksum command (macOS uses shasum, Linux often has sha256sum)
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_cmd="sha256sum"
   checksum_ext="sha256sum"
@@ -21,24 +17,19 @@ fi
 
 mkdir -p dist
 for target in "${targets[@]}"; do
-  echo "Building ${project_name} ${version} for ${target}..."
+  echo "Building ${product_name} ${version} for ${target}..."
   cargo build --release --quiet --target "${target}"
 
-  bin_path="target/${target}/release/${project_name}"
-  if [[ ! -f "${bin_path}" ]]; then
-    echo "Error: binary not found at ${bin_path}"
-    exit 1
-  fi
+  bin_path="target/${target}/release/${crate_name}"
+  [[ -f "${bin_path}" ]] || { echo "Error: binary not found at ${bin_path}"; exit 1; }
 
-  workdir="${project_name}_v${version}_${target}"
+  workdir="${product_name}_v${version}_${target}"
   rm -rf "${workdir}"
   mkdir -p "${workdir}"
 
-  # Copy artifacts and docs (include LICENSE to satisfy MIT requirements)
-  cp "${bin_path}" "${workdir}/${project_name}"
+  cp "${bin_path}" "${workdir}/${product_name}"
   cp LICENSE "${workdir}/LICENSE.txt"
   cp README.md "${workdir}/README.md"
-  # Optionally include third-party notices if present
   [[ -f THIRD_PARTY_LICENSES.txt ]] && cp THIRD_PARTY_LICENSES.txt "${workdir}/THIRD_PARTY_LICENSES.txt"
   [[ -f THIRD_PARTY_NOTICES.txt ]] && cp THIRD_PARTY_NOTICES.txt "${workdir}/THIRD_PARTY_NOTICES.txt"
 

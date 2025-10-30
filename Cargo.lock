@@ -3,37 +3,6 @@
 version = 4
 
 [[package]]
-name = "ShakesAutomation"
-version = "1.0.0"
-dependencies = [
- "ahash",
- "async-compression",
- "chrono",
- "clap",
- "clap-num",
- "fastrand",
- "iced",
- "iced_aw",
- "image 0.25.6",
- "indicatif",
- "log",
- "log4rs",
- "nohash-hasher",
- "num-format",
- "open",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "sf-api",
- "strum",
- "titlecase",
- "tokio",
- "toml 0.8.23",
- "winres",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3648,6 +3617,37 @@ dependencies = [
  "strum",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "sf-assistant"
+version = "1.0.0"
+dependencies = [
+ "ahash",
+ "async-compression",
+ "chrono",
+ "clap",
+ "clap-num",
+ "fastrand",
+ "iced",
+ "iced_aw",
+ "image 0.25.6",
+ "indicatif",
+ "log",
+ "log4rs",
+ "nohash-hasher",
+ "num-format",
+ "open",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sf-api",
+ "strum",
+ "titlecase",
+ "tokio",
+ "toml 0.8.23",
+ "winres",
 ]
 
 [[package]]

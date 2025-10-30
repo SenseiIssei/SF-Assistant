@@ -1,4 +1,3 @@
-# Requires: Rust toolchain, PowerShell 5+, and zip in PATH
 $ErrorActionPreference = 'Stop'
 
 function Get-VersionFromCargoToml {
@@ -10,20 +9,21 @@ function Get-VersionFromCargoToml {
 }
 
 $version = Get-VersionFromCargoToml
-$projectName = 'ShakesAutomation'
+$crateName = 'sf-assistant'
+$productName = 'SFAssistant'
 $target = 'x86_64-pc-windows-msvc'
 
-Write-Host "Building $projectName $version for $target..."
+Write-Host "Building $productName $version for $target..."
 & cargo build --release --quiet --target $target
 
-$binPath = Join-Path -Path "target/$target/release" -ChildPath "$projectName.exe"
+$binPath = Join-Path -Path "target/$target/release" -ChildPath "$crateName.exe"
 if (-not (Test-Path $binPath)) { throw "Binary not found: $binPath" }
 
-$workdir = "${projectName}_v${version}_${target}"
+$workdir = "${productName}_v${version}_${target}"
 if (Test-Path $workdir) { Remove-Item -Recurse -Force $workdir }
 New-Item -ItemType Directory -Path $workdir | Out-Null
 
-Copy-Item $binPath "$workdir/$projectName.exe"
+Copy-Item $binPath "$workdir/$productName.exe"
 Copy-Item LICENSE "$workdir/LICENSE.txt"
 Copy-Item README.md "$workdir/README.md"
 if (Test-Path 'THIRD_PARTY_LICENSES.txt') { Copy-Item 'THIRD_PARTY_LICENSES.txt' "$workdir/THIRD_PARTY_LICENSES.txt" }

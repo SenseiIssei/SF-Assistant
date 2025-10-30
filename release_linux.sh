@@ -2,7 +2,8 @@
 set -euo pipefail
 
 version=$(awk -F ' = ' '/^version = /{gsub(/"/,"",$2); print $2; exit}' Cargo.toml)
-project_name="ShakesAutomation"
+crate_name="sf-assistant"
+product_name="SFAssistant"
 
 targets=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
 
@@ -16,20 +17,17 @@ fi
 
 mkdir -p dist
 for target in "${targets[@]}"; do
-  echo "Building ${project_name} ${version} for ${target}..."
+  echo "Building ${product_name} ${version} for ${target}..."
   cargo build --release --quiet --target "${target}"
 
-  bin_path="target/${target}/release/${project_name}"
-  if [[ ! -f "${bin_path}" ]]; then
-    echo "Error: binary not found at ${bin_path}"
-    exit 1
-  fi
+  bin_path="target/${target}/release/${crate_name}"
+  [[ -f "${bin_path}" ]] || { echo "Error: binary not found at ${bin_path}"; exit 1; }
 
-  workdir="${project_name}_v${version}_${target}"
+  workdir="${product_name}_v${version}_${target}"
   rm -rf "${workdir}"
   mkdir -p "${workdir}"
 
-  cp "${bin_path}" "${workdir}/${project_name}"
+  cp "${bin_path}" "${workdir}/${product_name}"
   cp LICENSE "${workdir}/LICENSE.txt"
   cp README.md "${workdir}/README.md"
   [[ -f THIRD_PARTY_LICENSES.txt ]] && cp THIRD_PARTY_LICENSES.txt "${workdir}/THIRD_PARTY_LICENSES.txt"

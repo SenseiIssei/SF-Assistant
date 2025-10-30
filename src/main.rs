@@ -486,25 +486,14 @@ impl Application for Helper {
     }
 
     fn title(&self) -> String {
-        format!("ShakesAutomation v{}", env!("CARGO_PKG_VERSION"))
+        format!("SF Assistant v{}", env!("CARGO_PKG_VERSION"))
     }
 
     fn update(
         &mut self,
         message: Self::Message,
     ) -> iced::Command<Self::Message> {
-        // let start = std::time::Instant::now();
-        // let msg = format!("{message:?}");
-        let res = self.handle_msg(message);
-        _ = &res;
-        // let time = start.elapsed();
-        // if true{
-        //     println!(
-        //         "{} took: {time:?}",
-        //         msg.split('{').next().unwrap_or(&msg).trim(),
-        //     );
-        // }
-        res
+        self.handle_msg(message)
     }
 
     fn view(

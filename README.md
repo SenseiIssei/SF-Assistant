@@ -1,12 +1,20 @@
-# ShakesAutomation
+# SF Assistant — Shakes & Fidget bot (SF bot / S&F bot)
 
 [<img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" height="20" alt="Buy me a coffee">](https://ko-fi.com/senseiissei)
 
 An automation assistant for Shakes & Fidget that streamlines your daily routine with smart, safe defaults and a smooth, modern UI.
 
-ShakesAutomation focuses on doing the right thing, at the right time, with minimal fuss. It keeps primary activities mutually exclusive (so they don’t fight each other), lets you prioritize expedition rewards, and avoids using sandwatches/glasses unless you explicitly allow it.
+## About
 
-> Note: S&F has introduced rate limiting that impacts manual server-wide crawling. ShakesAutomation focuses on in-game automation and quality-of-life features rather than full-server crawls.
+SF Assistant is a lightweight automation companion for Shakes & Fidget. It runs the right task at the right time, prioritizes expedition rewards the way you want, and avoids spending sandwatches/glasses unless you explicitly allow it. With event-driven updates, multi-account support, and a clean dark theme, it keeps your daily routine fast and fuss‑free across accounts.
+
+Also known as: SF bot, S&F bot, Shakes and Fidget bot, Shakes & Fidget bot, Shakes&Fidget bot.
+
+> Note: S&F has introduced rate limiting that impacts manual server-wide crawling. SF Assistant focuses on in-game automation and quality-of-life features rather than full-server crawls.
+
+## Search keywords
+
+shakes and fidget bot, shakes & fidget bot, sf bot, s&f bot, shakes and fidget automation, shakes & fidget automation, sf automation, sf automation bot, s&f automation bot, shakes fidget bot
 
 ## Highlights
 
@@ -20,7 +28,7 @@ ShakesAutomation focuses on doing the right thing, at the right time, with minim
 
 ## What it automates
 
-ShakesAutomation can assist with:
+SF Assistant can assist with:
 
 - Tavern: Quest handling, optional beer purchase via mushrooms (within your set budget), optional glasses usage when enabled.
 - Expeditions: Reward-aware expedition selection, optional glasses usage, and quick lightning toggle in the UI.
@@ -40,7 +48,7 @@ The app enforces that only one primary activity (Tavern, Expeditions, City Guard
 
 ## Installation
 
-ShakesAutomation is a Rust application and can be built from source on Windows, macOS, or Linux.
+SF Assistant is a Rust application and can be built from source on Windows, macOS, or Linux.
 
 Prerequisites:
 - Rust toolchain (stable)
@@ -52,9 +60,10 @@ Build from source:
 cargo build --release
 ```
 
-The executable will be in `target/release/` (on Windows: `ShakesAutomation.exe`).
+The executable will be in `target/release/`.
+Official release archives include platform-specific names (Windows: `SFAssistant.exe`; macOS/Linux: `SFAssistant`).
 
-## Using ShakesAutomation
+## Using SF Assistant
 
 1. Launch the app and log in to your account(s).
 2. Check “Remember me” on the login screen to persist per-character, per-server settings.
@@ -86,4 +95,4 @@ This project is licensed under the MIT License. See `LICENSE` for details.
 	- Support the original author: [<img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" height="20" alt="Buy me a coffee">](https://ko-fi.com/J3J0ULD4J)
 - sf-api by the-marenga (protocol and game API used by this app): https://github.com/the-marenga/sf-api
 
-ShakesAutomation builds on the fantastic groundwork laid by the original Scrapbook Helper and sf-api projects. Thank you!
+SF Assistant builds on the fantastic groundwork laid by the original Scrapbook Helper and sf-api projects. Thank you!
